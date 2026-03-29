@@ -1190,11 +1190,16 @@ function renderHUD(){
     ctx.textAlign='center';ctx.fillText('⚠  CHEAT MODE  —  trajectory + SOI circles',cw/2,28);ctx.textAlign='left';
   }
 
-  // Zoom + hint bar
-  ctx.fillStyle=C_DIM;ctx.font=fnt(22);
-  ctx.textAlign='right';ctx.fillText(`×${S.cam.zoom.toFixed(2)}`,cw-16,ch-14);ctx.textAlign='left';
+  // Bottom row: version left, controls centre, zoom right
+  const ver = window.GAME_VER || 'dev';
   ctx.fillStyle=C_DIM;ctx.font=fnt(21);
-  ctx.fillText('WASD · SHIFT:boost · SPACE:laser · -/=:zoom · M:map · `:cheat · R:restart · ESC:pause',22,ch-14);
+  ctx.textAlign='left';
+  ctx.fillText(ver, 22, ch-14);
+  ctx.textAlign='center';
+  ctx.fillText('WASD · SHIFT:boost · SPACE:laser · -/=:zoom · M:map · `:cheat · R:restart · ESC:pause', cw/2, ch-14);
+  ctx.textAlign='right';
+  ctx.fillText(`×${S.cam.zoom.toFixed(2)}`, cw-16, ch-14);
+  ctx.textAlign='left';
 
   if(S.showMinimap) renderMinimap();
 }
