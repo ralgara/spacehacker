@@ -397,7 +397,7 @@ function genWorld() {
       mass:1000,radius:rn(26,46),color:pCols[i],glow:pCols[i],parentIdx:0,
     });
     for(let j=0;j<ri(1,4);j++){
-      const orR=S.bodies[pi].radius+rn(35,110),orA=ra(),orS=rn(0.4,1.0)*(nr()>0.5?1:-1);
+      const orR=S.bodies[pi].radius*DRAW_SCALE+rn(40,120),orA=ra(),orS=rn(0.4,1.0)*(nr()>0.5?1:-1);
       S.bodies.push({
         type:'moon',
         x:S.bodies[pi].x+Math.cos(orA)*orR,
@@ -438,7 +438,7 @@ function genWorld() {
 
   // Safety: nudge spawn away from any body
   for(let attempt=0;attempt<40;attempt++){
-    const inside=S.bodies.some(b=>dist(sx,sy,b.x,b.y)<b.radius+SHIP_R+60);
+    const inside=S.bodies.some(b=>dist(sx,sy,b.x,b.y)<b.radius*DRAW_SCALE+SHIP_R+60);
     if(!inside) break;
     sx=clamp(sx+rn(-120,120),200,MAP-200);
     sy=clamp(sy+rn(-120,120),200,MAP-200);
@@ -552,7 +552,7 @@ function updatePhysics(dt){
 
   if(sh.x<-200||sh.x>MAP+200||sh.y<-200||sh.y>MAP+200){killShip('oob');return;}
   for(const b of S.bodies)
-    if(dist(sh.x,sh.y,b.x,b.y)<b.radius+SHIP_R){killShip(b.type);return;}
+    if(dist(sh.x,sh.y,b.x,b.y)<b.radius*DRAW_SCALE+SHIP_R){killShip(b.type);return;}
   for(const c of S.comets)
     if(dist(sh.x,sh.y,c.x,c.y)<c.radius+SHIP_R){killShip('comet');return;}
 }
@@ -672,7 +672,7 @@ function updateObjectives(dt){
       if(obj.targetIdx<0||obj.targetIdx>=S.bodies.length){obj.complete=true;continue;}
       const tgt=S.bodies[obj.targetIdx];
       if(tgt.type!=='asteroid'){obj.complete=true;continue;}
-      if(dist(sh.x,sh.y,tgt.x,tgt.y)<tgt.radius+65){
+      if(dist(sh.x,sh.y,tgt.x,tgt.y)<tgt.radius*DRAW_SCALE+65){
         obj.progress=Math.min(1,obj.progress+dt/3);
         if(obj.progress>=1) completObj(obj);
       } else {
@@ -681,7 +681,7 @@ function updateObjectives(dt){
     } else if(obj.type==='slingshot'){
       for(const pi of obj.targets){
         if(obj.completed.has(pi)||pi>=S.bodies.length) continue;
-        if(dist(sh.x,sh.y,S.bodies[pi].x,S.bodies[pi].y)<S.bodies[pi].radius*3.5) obj.completed.add(pi);
+        if(dist(sh.x,sh.y,S.bodies[pi].x,S.bodies[pi].y)<S.bodies[pi].radius*DRAW_SCALE*1.4) obj.completed.add(pi);
       }
       if(obj.completed.size>=obj.targets.length) completObj(obj);
     } else if(obj.type==='orbit'){
@@ -692,7 +692,7 @@ function updateObjectives(dt){
       const ux=(b.x-sh.x)/r,uy=(b.y-sh.y)/r;
       const vRad=sh.vx*ux+sh.vy*uy;
       const vTan=Math.sqrt(Math.max(0,vShip*vShip-vRad*vRad));
-      if(r>b.radius*3&&r<b.radius*8&&Math.abs(vTan-vCirc)/vCirc<0.45){
+      if(r>b.radius*DRAW_SCALE*1.2&&r<b.radius*DRAW_SCALE*3.2&&Math.abs(vTan-vCirc)/vCirc<0.45){
         obj.timer+=dt; if(obj.timer>=obj.required) completObj(obj);
       } else {
         obj.timer=Math.max(0,obj.timer-dt*0.5);
@@ -719,7 +719,7 @@ function computeTraj(){
     let ax=0,ay=0;
     for(const b of S.bodies){
       const dx=b.x-x,dy=b.y-y,r2=dx*dx+dy*dy,r=Math.sqrt(r2);
-      if(r<b.radius){hit=true;break;}
+      if(r<b.radius*DRAW_SCALE){hit=true;break;}
       const a=G*b.mass/r2; ax+=a*dx/r; ay+=a*dy/r;
     }
     if(hit) break;
@@ -866,12 +866,12 @@ function renderObjMarkers(){
     } else if(obj.type==='orbit'){
       const b=S.bodies[obj.targetIdx];
       ctx.strokeStyle=obj.color;ctx.lineWidth=1;ctx.globalAlpha=0.35;
-      ctx.beginPath();ctx.arc(b.x,b.y,b.radius*3,0,Math.PI*2);ctx.stroke();
-      ctx.beginPath();ctx.arc(b.x,b.y,b.radius*8,0,Math.PI*2);ctx.stroke();
+      ctx.beginPath();ctx.arc(b.x,b.y,b.radius*DRAW_SCALE*1.2,0,Math.PI*2);ctx.stroke();
+      ctx.beginPath();ctx.arc(b.x,b.y,b.radius*DRAW_SCALE*3.2,0,Math.PI*2);ctx.stroke();
       ctx.globalAlpha=1;
       if(obj.timer>0){
         ctx.strokeStyle=obj.color;ctx.lineWidth=4;
-        ctx.beginPath();ctx.arc(b.x,b.y,(b.radius*3+b.radius*8)/2,-Math.PI/2,-Math.PI/2+(obj.timer/obj.required)*Math.PI*2);
+        ctx.beginPath();ctx.arc(b.x,b.y,b.radius*DRAW_SCALE*2.2,-Math.PI/2,-Math.PI/2+(obj.timer/obj.required)*Math.PI*2);
         ctx.stroke();
       }
     }
