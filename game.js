@@ -140,26 +140,24 @@ function lineCircleHit(x1,y1,x2,y2,cx,cy,r) {
 // ================================================================
 let AUD = null;
 
-// ---- Chord progression: Am7 → Fmaj7 → Dm7 → E7b9 (A natural minor, i–bVI–iv–V7b9)
-// The E7b9 (tritone tension) resolves dramatically back to Am7.
-// Each chord voiced root–3rd–5th–7th in octave 2–3 for bass arp,
-// plus a chord-specific lead pool one-two octaves up.
+// ---- Chord progression: Am → F → C → G  (A natural minor, i–VI–III–VII)
+// Clean triads — no tritones, no dissonance. Spacious and melodic.
 const MUSIC = [
-  // Am7 — floating dark tonic
-  { arp:  [110.00, 130.81, 164.81, 196.00],   // A2 C3 E3 G3
+  // Am — floating tonic (A C E)
+  { arp:  [110.00, 130.81, 164.81, 220.00],   // A2 C3 E3 A3
     lead: [440.00, 523.25, 659.25, 880.00] },  // A4 C5 E5 A5
-  // Fmaj7 — warm expansion (bVI lifts)
-  { arp:  [87.307, 110.00, 164.81, 220.00],   // F2 A2 E3 A3
+  // F — warm lift (F A C)
+  { arp:  [87.307, 110.00, 130.81, 174.61],   // F2 A2 C3 F3
     lead: [349.23, 440.00, 523.25, 698.46] },  // F4 A4 C5 F5
-  // Dm7 — contemplative subdominant
-  { arp:  [73.416, 110.00, 130.81, 174.61],   // D2 A2 C3 F3
-    lead: [293.66, 440.00, 587.33, 880.00] },  // D4 A4 D5 A5
-  // E7b9 — TENSION: tritone G#↔D, flat-9 F natural → screams resolution
-  { arp:  [82.407, 103.83, 123.47, 146.83],   // E2 G#2 B2 D3
-    lead: [329.63, 415.30, 440.00, 554.37] },  // E4 G#4 A4 C#5
+  // C — open and bright (C E G)
+  { arp:  [65.406,  82.407,  98.000, 130.81], // C2 E2 G2 C3
+    lead: [523.25,  659.25,  784.00, 1046.5] },// C5 E5 G5 C6
+  // G — return / dominant (G B D)
+  { arp:  [98.000, 123.47, 146.83, 196.00],   // G2 B2 D3 G3
+    lead: [392.00, 493.88, 587.33, 784.00] },  // G4 B4 D5 G5
 ];
-// Sub-bass: low root on chord downbeat (one more octave down)
-const BASS_ROOTS = [55.00, 43.654, 36.708, 41.203]; // A1 F1 D1 E1
+// Sub-bass: low root on chord downbeat
+const BASS_ROOTS = [55.00, 43.654, 65.406, 48.999]; // A1 F1 C2 G1
 
 const ARP_PAT     = [0, 1, 2, 3, 2, 1];    // up-down through 4-note voicing
 const ARP_INT     = 0.30;                   // seconds per arp step
@@ -259,9 +257,7 @@ function scheduleMusic() {
     const chord = MUSIC[_cIdx];
     const noteFreq = chord.arp[ARP_PAT[_arpStep % ARP_PAT.length]];
 
-    // Vol varies: E7b9 chord is louder/brighter to sell the tension
-    const vol = _cIdx === 3 ? 0.22 : 0.16;
-    _schedArp(noteFreq, _nextArp, vol);
+    _schedArp(noteFreq, _nextArp, 0.16);
 
     // Sub-bass + chord reset on first step of each chord
     if (_cStep === 0) _schedBass(BASS_ROOTS[_cIdx], _nextArp);
@@ -278,8 +274,7 @@ function scheduleMusic() {
   if (_nextLead < now + 0.8) {
     const pool = MUSIC[_cIdx].lead;
     _schedLead(pool[Math.floor(Math.random()*pool.length)], _nextLead, 0.10);
-    // Lead notes closer together during tension chord
-    _nextLead += _cIdx === 3 ? (1.0 + Math.random()*1.5) : (1.8 + Math.random()*3.0);
+    _nextLead += 1.8 + Math.random()*3.0;
   }
 }
 
@@ -1108,7 +1103,7 @@ function renderTraj(){
 // ================================================================
 // HUD
 // ================================================================
-function fnt(sz, mono=true) { return `${sz}px ${mono?'monospace':'serif'}`; }
+function fnt(sz, mono=true) { return `${sz}px ${mono?'"Orbitron", monospace':'Georgia, serif'}`; }
 
 function renderHUD(){
   const cw=canvas.width,ch=canvas.height;
@@ -1249,7 +1244,16 @@ function renderMinimap(){
     if(ox==null) continue;
     ctx.fillStyle=obj.color;ctx.beginPath();ctx.arc(mx+ox*sc,my+oy*sc,4,0,Math.PI*2);ctx.fill();
   }
-  ctx.fillStyle='#ffffff';ctx.beginPath();ctx.arc(mx+S.ship.x*sc,my+S.ship.y*sc,4,0,Math.PI*2);ctx.fill();
+  // Ship — bright oriented triangle with glow ring
+  const smx=mx+S.ship.x*sc, smy=my+S.ship.y*sc, smr=7;
+  ctx.save();ctx.translate(smx,smy);ctx.rotate(S.ship.angle);
+  ctx.strokeStyle='rgba(0,255,180,0.55)';ctx.lineWidth=1.5;
+  ctx.beginPath();ctx.arc(0,0,smr+4,0,Math.PI*2);ctx.stroke();
+  ctx.fillStyle='#00ffcc';
+  ctx.beginPath();
+  ctx.moveTo(0,-smr);ctx.lineTo(smr*0.65,smr*0.9);ctx.lineTo(0,smr*0.35);ctx.lineTo(-smr*0.65,smr*0.9);
+  ctx.closePath();ctx.fill();
+  ctx.restore();
   ctx.fillStyle=C_DIM;ctx.font=fnt(20);ctx.fillText('M · hide',mx+2,my+mm+22);
 }
 
@@ -1267,7 +1271,7 @@ function renderMenu(){
 
   // Title — large, bold cyan
   ctx.fillStyle='#11ddff';
-  ctx.font='bold 144px monospace';
+  ctx.font='bold 144px "Orbitron", monospace';
   ctx.fillText('SPACEHACKER',cw/2,ch*0.38);
 
   // Subtitle
@@ -1294,10 +1298,10 @@ function renderMenu(){
 
 function renderDead(){
   const cw=canvas.width,ch=canvas.height;
-  ctx.fillStyle='rgba(12,0,0,0.88)';ctx.fillRect(0,0,cw,ch);
+  ctx.fillStyle='rgba(8,0,0,0.58)';ctx.fillRect(0,0,cw,ch);
   ctx.textAlign='center';
 
-  ctx.fillStyle='#ff2244';ctx.font='bold 120px monospace';
+  ctx.fillStyle='#ff2244';ctx.font='bold 120px "Orbitron", monospace';
   ctx.fillText('SHIP  DESTROYED',cw/2,ch/2-110);
 
   const causeLabels={star:'struck a star',planet:'planetary collision',moon:'moon impact',
@@ -1323,7 +1327,7 @@ function renderWin(){
   ctx.fillStyle='rgba(0,12,8,0.88)';ctx.fillRect(0,0,cw,ch);
   ctx.textAlign='center';
 
-  ctx.fillStyle='#22ffaa';ctx.font='bold 120px monospace';
+  ctx.fillStyle='#22ffaa';ctx.font='bold 120px "Orbitron", monospace';
   ctx.fillText('MISSION  COMPLETE',cw/2,ch/2-90);
 
   ctx.fillStyle=C_VALUE;ctx.font=fnt(48);
@@ -1341,7 +1345,7 @@ function renderPause(){
   const cw=canvas.width,ch=canvas.height;
   ctx.fillStyle='rgba(0,0,0,0.65)';ctx.fillRect(0,0,cw,ch);
   ctx.textAlign='center';
-  ctx.fillStyle='#aaccff';ctx.font='bold 120px monospace';
+  ctx.fillStyle='#aaccff';ctx.font='bold 120px "Orbitron", monospace';
   ctx.fillText('PAUSED',cw/2,ch/2+20);
   ctx.fillStyle=C_DIM;ctx.font=fnt(46);
   ctx.fillText('ESC · resume',cw/2,ch/2+96);
