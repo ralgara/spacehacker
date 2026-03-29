@@ -13,7 +13,7 @@ window.addEventListener('resize', resize);
 // CONSTANTS
 // ================================================================
 const MAP        = 8000;
-const G          = 1500;           // 3× — gravity is meaningful now
+const G          = 1950;           // ~4× baseline — gravity is dominant
 const SOI_ACCEL  = 15;             // threshold accel (units/s²) for SOI display (~10% of max thrust)
 
 const SHIP_R     = 8;
@@ -357,7 +357,7 @@ let S = {};
 
 function initState() {
   S = {
-    phase:'menu', runCount:0, time:0,
+    phase:'menu', runCount:0, time:0, wave:1, waveTimer:0, waveBanner:false, objectivesDone:0,
     bodies:[], comets:[], objectives:[], lasers:[],
     ship:{x:0,y:0,vx:0,vy:0,angle:0,fuel:FUEL_MAX,alive:true,
           thrusting:false,thrustDir:1,zeroFuelTimer:0,laserCooldown:0,grace:0},
@@ -455,7 +455,7 @@ function genWorld() {
   };
   S.cam.x=sx; S.cam.y=sy; S.cam.zoom=ZOOM_DEF;
   S.cometTimer=0; S.nextComet=rn(COMET_MIN,COMET_MAX);
-  S.time=0;
+  S.time=0; S.wave=1; S.waveTimer=0; S.waveBanner=false; S.objectivesDone=0;
 
   genObjectives(planetIdxs,asteroidIdxs);
 }
@@ -699,13 +699,56 @@ function updateObjectives(dt){
       }
     }
   }
-  if(S.objectives.length>0&&S.objectives.every(o=>o.complete)) S.phase='win';
+  if(S.objectives.length>0&&S.objectives.every(o=>o.complete)&&!S.waveBanner){
+    S.waveBanner=true; S.waveTimer=2.4;
+  }
+  if(S.waveBanner){
+    S.waveTimer-=dt;
+    if(S.waveTimer<=0){S.waveBanner=false;appendObjectives();}
+  }
 }
 
 function completObj(obj){
-  obj.complete=true;
+  obj.complete=true; S.objectivesDone++;
   if(obj.fuelReward>0) S.ship.fuel=Math.min(FUEL_MAX,S.ship.fuel+obj.fuelReward);
   playChime();
+}
+
+function appendObjectives(){
+  S.objectives=S.objectives.filter(o=>!o.complete);
+  S.wave++;
+  const tier=Math.min(4,1+Math.floor(S.wave/2));
+  const planetIdxs=S.bodies.map((b,i)=>b.type==='planet'?i:-1).filter(i=>i>=0);
+  const asteroidIdxs=S.bodies.map((b,i)=>b.type==='asteroid'&&!b.isMining?i:-1).filter(i=>i>=0);
+
+  const sp=safePos();
+  S.objectives.push({type:'reach',x:sp.x,y:sp.y,radius:45,
+    label:`Reach Station ${S.wave}`,complete:false,fuelReward:150,color:'#00ffcc'});
+
+  if(tier>=2){
+    if(asteroidIdxs.length>0&&nr()>0.4){
+      const ai=asteroidIdxs[ri(0,asteroidIdxs.length)];
+      S.bodies[ai].isMining=true;S.bodies[ai].vx=rn(-35,35);S.bodies[ai].vy=rn(-35,35);
+      S.objectives.push({type:'mine',targetIdx:ai,label:'Mine Asteroid (3s)',
+        complete:false,fuelReward:300,color:'#ffaa00',progress:0});
+    } else if(nr()>0.4){
+      const cp=safePos();
+      S.objectives.push({type:'collect',x:cp.x,y:cp.y,radius:25,label:'Collect Resource Pod',
+        complete:false,fuelReward:200,color:'#ffff44'});
+    }
+  }
+  if(tier>=3&&nr()>0.35){
+    if(nr()>0.5&&planetIdxs.length>=2){
+      const n=Math.min(2,planetIdxs.length);
+      const tgts=[...planetIdxs].sort(()=>nr()-0.5).slice(0,n);
+      S.objectives.push({type:'slingshot',targets:tgts,completed:new Set(),
+        label:`Slingshot ${n} planet${n>1?'s':''}`,complete:false,fuelReward:400,color:'#ff88ff'});
+    } else if(planetIdxs.length>0){
+      const pi=planetIdxs[ri(0,planetIdxs.length)];
+      S.objectives.push({type:'orbit',targetIdx:pi,label:'Establish orbit (5s)',
+        complete:false,fuelReward:350,color:'#88ffff',timer:0,required:5});
+    }
+  }
 }
 
 // ================================================================
@@ -1185,6 +1228,18 @@ function renderHUD(){
     ctx.textAlign='center';ctx.fillText('⚠  CHEAT MODE  —  trajectory + SOI circles',cw/2,28);ctx.textAlign='left';
   }
 
+  // Wave number — top right
+  ctx.fillStyle=C_DIM;ctx.font=fnt(26);
+  ctx.textAlign='right';ctx.fillText(`WAVE ${S.wave}`,cw-16,38);ctx.textAlign='left';
+
+  // Wave-complete banner
+  if(S.waveBanner){
+    const fade=Math.min(1,S.waveTimer/0.4)*Math.min(1,(S.waveTimer/2.4)*2);
+    ctx.fillStyle=`rgba(0,255,160,${fade})`;
+    ctx.font='bold '+fnt(64);
+    ctx.textAlign='center';ctx.fillText(`WAVE ${S.wave} COMPLETE`,cw/2,ch/2-60);ctx.textAlign='left';
+  }
+
   // Bottom row: version left, controls centre, zoom right
   const ver = window.GAME_VER || 'dev';
   ctx.fillStyle=C_DIM;ctx.font=fnt(21);
@@ -1313,7 +1368,7 @@ function renderDead(){
   ctx.fillText(`"${S.death.message}"`,cw/2,ch/2+30);
 
   ctx.fillStyle=C_DIM;ctx.font=fnt(38);
-  ctx.fillText(`time: ${S.time.toFixed(1)}s  ·  objectives: ${S.objectives.filter(o=>o.complete).length}/${S.objectives.length}`,cw/2,ch/2+96);
+  ctx.fillText(`time: ${S.time.toFixed(1)}s  ·  objectives: ${S.objectivesDone}  ·  wave: ${S.wave}`,cw/2,ch/2+96);
 
   const t=Date.now()/1000;
   ctx.fillStyle=`rgba(100,180,220,${0.5+0.5*Math.sin(t*2)})`;
@@ -1322,24 +1377,6 @@ function renderDead(){
   ctx.textAlign='left';
 }
 
-function renderWin(){
-  const cw=canvas.width,ch=canvas.height;
-  ctx.fillStyle='rgba(0,12,8,0.88)';ctx.fillRect(0,0,cw,ch);
-  ctx.textAlign='center';
-
-  ctx.fillStyle='#22ffaa';ctx.font='bold 120px "Orbitron", monospace';
-  ctx.fillText('MISSION  COMPLETE',cw/2,ch/2-90);
-
-  ctx.fillStyle=C_VALUE;ctx.font=fnt(48);
-  ctx.fillText(`fuel remaining:  ${S.ship.fuel.toFixed(0)} / ${FUEL_MAX}`,cw/2,ch/2-14);
-  ctx.fillText(`time:  ${S.time.toFixed(1)}s`,cw/2,ch/2+48);
-
-  const t=Date.now()/1000;
-  ctx.fillStyle=`rgba(0,220,160,${0.5+0.5*Math.sin(t*2)})`;
-  ctx.font=fnt(46);
-  ctx.fillText('ENTER · new mission      ESC · menu',cw/2,ch/2+130);
-  ctx.textAlign='left';
-}
 
 function renderPause(){
   const cw=canvas.width,ch=canvas.height;
@@ -1371,7 +1408,6 @@ function render(){
   if(S.phase==='playing'||S.phase==='paused') renderHUD();
   if(S.phase==='paused') renderPause();
   if(S.phase==='dead')  {renderHUD();renderDead();}
-  if(S.phase==='win')   {renderHUD();renderWin();}
 }
 
 // ================================================================
@@ -1386,10 +1422,10 @@ window.addEventListener('keydown',e=>{
     case 'Escape':
       if(S.phase==='playing')     S.phase='paused';
       else if(S.phase==='paused') S.phase='playing';
-      else if(S.phase==='dead'||S.phase==='win') S.phase='menu';
+      else if(S.phase==='dead') S.phase='menu';
       break;
     case 'Enter':case 'NumpadEnter':
-      if(S.phase==='menu'||S.phase==='dead'||S.phase==='win') startRun();
+      if(S.phase==='menu'||S.phase==='dead') startRun();
       break;
     case 'KeyR':
       if(S.phase==='playing'||S.phase==='paused') startRun();
@@ -1421,7 +1457,7 @@ let lastTs=0;
 function startRun(){
   initAudio();
   _resetMusic();
-  if(S.phase==='dead'||S.phase==='win') S.runCount=(S.runCount||0)+1;
+  if(S.phase==='dead') S.runCount=(S.runCount||0)+1;
   S.phase='playing';S.cheat=false;S.showMinimap=true;
   genWorld();
 }
