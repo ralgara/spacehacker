@@ -13,7 +13,8 @@ window.addEventListener('resize', resize);
 // CONSTANTS
 // ================================================================
 const MAP        = 8000;
-const G          = 500;
+const G          = 1500;           // 3× — gravity is meaningful now
+const SOI_ACCEL  = 15;             // threshold accel (units/s²) for SOI display (~10% of max thrust)
 
 const SHIP_R     = 8;
 const THRUST     = 150;
@@ -135,28 +136,40 @@ function lineCircleHit(x1,y1,x2,y2,cx,cy,r) {
 }
 
 // ================================================================
-// AUDIO  — arpeggiated bass + sparse lead, glassy sine/triangle
+// AUDIO
 // ================================================================
 let AUD = null;
 
-// Chord progression: Cmaj9 → Fmaj9 → Am9 → Em7
-const CHORDS = [
-  [130.81, 164.81, 196.00, 293.66],  // Cmaj9  C3 E3 G3 D4
-  [174.61, 220.00, 261.63, 392.00],  // Fmaj9  F3 A3 C4 G4
-  [220.00, 261.63, 329.63, 493.88],  // Am9    A3 C4 E4 B4
-  [164.81, 196.00, 246.94, 293.66],  // Em7    E3 G3 B3 D4
+// ---- Chord progression: Am7 → Fmaj7 → Dm7 → E7b9 (A natural minor, i–bVI–iv–V7b9)
+// The E7b9 (tritone tension) resolves dramatically back to Am7.
+// Each chord voiced root–3rd–5th–7th in octave 2–3 for bass arp,
+// plus a chord-specific lead pool one-two octaves up.
+const MUSIC = [
+  // Am7 — floating dark tonic
+  { arp:  [110.00, 130.81, 164.81, 196.00],   // A2 C3 E3 G3
+    lead: [440.00, 523.25, 659.25, 880.00] },  // A4 C5 E5 A5
+  // Fmaj7 — warm expansion (bVI lifts)
+  { arp:  [87.307, 110.00, 164.81, 220.00],   // F2 A2 E3 A3
+    lead: [349.23, 440.00, 523.25, 698.46] },  // F4 A4 C5 F5
+  // Dm7 — contemplative subdominant
+  { arp:  [73.416, 110.00, 130.81, 174.61],   // D2 A2 C3 F3
+    lead: [293.66, 440.00, 587.33, 880.00] },  // D4 A4 D5 A5
+  // E7b9 — TENSION: tritone G#↔D, flat-9 F natural → screams resolution
+  { arp:  [82.407, 103.83, 123.47, 146.83],   // E2 G#2 B2 D3
+    lead: [329.63, 415.30, 440.00, 554.37] },  // E4 G#4 A4 C#5
 ];
-// Pentatonic lead pool (C5 D5 E5 G5 A5 C6)
-const LEAD_POOL = [523.25, 587.33, 659.25, 783.99, 880.00, 1046.50];
-const ARP_PAT   = [0, 1, 2, 3, 2, 1];   // smooth up-down
-const ARP_INT   = 0.33;                  // seconds per arp step
-const CHORD_STEPS = ARP_PAT.length * 4; // 24 steps = ~8s per chord
+// Sub-bass: low root on chord downbeat (one more octave down)
+const BASS_ROOTS = [55.00, 43.654, 36.708, 41.203]; // A1 F1 D1 E1
 
-let _arpStep   = 0;
-let _chordStep = 0;
-let _chordIdx  = 0;
-let _nextNote  = 0;  // audio-context time for next arp note
-let _nextLead  = 0;  // audio-context time for next lead note
+const ARP_PAT     = [0, 1, 2, 3, 2, 1];    // up-down through 4-note voicing
+const ARP_INT     = 0.30;                   // seconds per arp step
+const CHORD_STEPS = ARP_PAT.length * 2;    // 12 steps (~3.6s) per chord
+
+let _arpStep  = 0;
+let _cStep    = 0;    // steps within current chord
+let _cIdx     = 0;    // chord index
+let _nextArp  = 0;    // scheduled time of next arp note
+let _nextLead = 0;    // scheduled time of next lead note
 
 function initAudio() {
   if (AUD) { try { AUD.ctx.resume(); } catch(_){} return; }
@@ -164,93 +177,109 @@ function initAudio() {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
 
     // Master
-    const master = ctx.createGain();
-    master.gain.value = 0.42;
-    master.connect(ctx.destination);
+    const master = ctx.createGain(); master.gain.value = 0.40; master.connect(ctx.destination);
 
-    // Reverb: delay+feedback loop
-    const revDelay = ctx.createDelay(1.5);
-    revDelay.delayTime.value = 0.46;
-    const revFB  = ctx.createGain(); revFB.gain.value = 0.46;
-    const revOut = ctx.createGain(); revOut.gain.value = 0.32;
+    // Reverb: delay+feedback
+    const revDelay = ctx.createDelay(1.5); revDelay.delayTime.value = 0.44;
+    const revFB  = ctx.createGain(); revFB.gain.value  = 0.48;
+    const revOut = ctx.createGain(); revOut.gain.value = 0.30;
     revDelay.connect(revFB); revFB.connect(revDelay);
     revDelay.connect(revOut); revOut.connect(master);
 
-    // Warm low-pass (modulated by proximity)
+    // Low-pass warmth filter (proximity-modulated)
     const filt = ctx.createBiquadFilter();
-    filt.type = 'lowpass'; filt.frequency.value = 1800; filt.Q.value = 1.0;
+    filt.type='lowpass'; filt.frequency.value=1600; filt.Q.value=1.0;
     filt.connect(master); filt.connect(revDelay);
 
-    // Thrust noise (bandpass, looping)
+    // Thrust noise
     const nBuf = (() => {
       const b=ctx.createBuffer(1,ctx.sampleRate*2,ctx.sampleRate);
-      const d=b.getChannelData(0);
-      for(let i=0;i<d.length;i++) d[i]=Math.random()*2-1;
+      const d=b.getChannelData(0); for(let i=0;i<d.length;i++) d[i]=Math.random()*2-1;
       return b;
     })();
-    const nSrc  = ctx.createBufferSource(); nSrc.buffer=nBuf; nSrc.loop=true;
-    const nFilt = ctx.createBiquadFilter(); nFilt.type='bandpass'; nFilt.frequency.value=340; nFilt.Q.value=2.5;
-    const nGain = ctx.createGain(); nGain.gain.value=0;
+    const nSrc=ctx.createBufferSource(); nSrc.buffer=nBuf; nSrc.loop=true;
+    const nFilt=ctx.createBiquadFilter(); nFilt.type='bandpass'; nFilt.frequency.value=340; nFilt.Q.value=2.5;
+    const nGain=ctx.createGain(); nGain.gain.value=0;
     nSrc.connect(nFilt); nFilt.connect(nGain); nGain.connect(master);
     nSrc.start();
 
     AUD = { ctx, master, filt, revDelay, nGain };
-
-    // Reset music state
-    _arpStep=0; _chordStep=0; _chordIdx=0; _nextNote=0; _nextLead=0;
-
+    _resetMusic();
   } catch(e) { console.warn('Web Audio unavailable:', e); AUD=null; }
 }
 
+// Sub-bass: deep sine hit on chord downbeat
+function _schedBass(freq, time) {
+  const c=AUD.ctx;
+  const osc=c.createOscillator(), env=c.createGain();
+  osc.type='sine'; osc.frequency.value=freq;
+  osc.connect(env); env.connect(AUD.master);
+  env.gain.setValueAtTime(0,time);
+  env.gain.linearRampToValueAtTime(0.28, time+0.02);
+  env.gain.exponentialRampToValueAtTime(0.001, time+1.8);
+  osc.start(time); osc.stop(time+1.9);
+}
+
+// Arp voice: sine through reverb
 function _schedArp(freq, time, vol) {
   const c=AUD.ctx;
   const osc=c.createOscillator(), env=c.createGain();
   osc.type='sine'; osc.frequency.value=freq;
   osc.connect(env); env.connect(AUD.filt);
   env.gain.setValueAtTime(0,time);
-  env.gain.linearRampToValueAtTime(vol, time+0.04);
-  env.gain.exponentialRampToValueAtTime(0.001, time+0.52);
-  osc.start(time); osc.stop(time+0.58);
+  env.gain.linearRampToValueAtTime(vol, time+0.035);
+  env.gain.exponentialRampToValueAtTime(0.001, time+0.50);
+  osc.start(time); osc.stop(time+0.55);
 }
 
+// Lead voice: triangle, glassy shimmer, drier
 function _schedLead(freq, time, vol) {
   const c=AUD.ctx;
   const osc=c.createOscillator(), env=c.createGain();
   osc.type='triangle'; osc.frequency.value=freq;
-  // Tiny pitch glide for glassy shimmer
-  osc.frequency.setValueAtTime(freq*1.003, time);
-  osc.frequency.exponentialRampToValueAtTime(freq, time+0.12);
-  osc.connect(env);
-  env.connect(AUD.filt);  // goes through reverb too
-  env.connect(AUD.master);
+  osc.frequency.setValueAtTime(freq*1.004, time);
+  osc.frequency.exponentialRampToValueAtTime(freq, time+0.10);
+  osc.connect(env); env.connect(AUD.filt); env.connect(AUD.master);
   env.gain.setValueAtTime(0,time);
-  env.gain.linearRampToValueAtTime(vol, time+0.025);
-  env.gain.exponentialRampToValueAtTime(0.001, time+0.82);
-  osc.start(time); osc.stop(time+0.88);
+  env.gain.linearRampToValueAtTime(vol, time+0.02);
+  env.gain.exponentialRampToValueAtTime(0.001, time+0.90);
+  osc.start(time); osc.stop(time+0.95);
 }
+
+function _resetMusic() { _arpStep=0;_cStep=0;_cIdx=0;_nextArp=0;_nextLead=0; }
 
 function scheduleMusic() {
   if (!AUD || S.phase !== 'playing') return;
   const now = AUD.ctx.currentTime;
-  if (_nextNote < now) _nextNote = now + 0.05;
-  if (_nextLead < now) _nextLead = now + 0.1 + Math.random()*1.5;
+  if (_nextArp  < now) _nextArp  = now + 0.04;
+  if (_nextLead < now) _nextLead = now + 0.12 + Math.random()*1.2;
 
-  // Arp: schedule up to 0.7s ahead
-  while (_nextNote < now + 0.7) {
-    const chord = CHORDS[_chordIdx];
-    const freq  = chord[ARP_PAT[_arpStep % ARP_PAT.length]];
-    _schedArp(freq, _nextNote, 0.17);
-    _arpStep++;
-    _nextNote += ARP_INT;
-    _chordStep++;
-    if (_chordStep >= CHORD_STEPS) { _chordStep=0; _chordIdx=(_chordIdx+1)%CHORDS.length; }
+  // Schedule arp notes up to 0.8s ahead
+  while (_nextArp < now + 0.8) {
+    const chord = MUSIC[_cIdx];
+    const noteFreq = chord.arp[ARP_PAT[_arpStep % ARP_PAT.length]];
+
+    // Vol varies: E7b9 chord is louder/brighter to sell the tension
+    const vol = _cIdx === 3 ? 0.22 : 0.16;
+    _schedArp(noteFreq, _nextArp, vol);
+
+    // Sub-bass + chord reset on first step of each chord
+    if (_cStep === 0) _schedBass(BASS_ROOTS[_cIdx], _nextArp);
+
+    _arpStep++; _cStep++; _nextArp += ARP_INT;
+
+    if (_cStep >= CHORD_STEPS) {
+      _cStep = 0;
+      _cIdx  = (_cIdx + 1) % MUSIC.length;
+    }
   }
 
-  // Lead: sparse, every 1.8–5s
-  if (_nextLead < now + 0.7) {
-    const lf = LEAD_POOL[Math.floor(Math.random()*LEAD_POOL.length)];
-    _schedLead(lf, _nextLead, 0.11);
-    _nextLead += 1.8 + Math.random()*3.2;
+  // Sparse lead — chord-aware pitch selection
+  if (_nextLead < now + 0.8) {
+    const pool = MUSIC[_cIdx].lead;
+    _schedLead(pool[Math.floor(Math.random()*pool.length)], _nextLead, 0.10);
+    // Lead notes closer together during tension chord
+    _nextLead += _cIdx === 3 ? (1.0 + Math.random()*1.5) : (1.8 + Math.random()*3.0);
   }
 }
 
@@ -857,44 +886,160 @@ function renderObjMarkers(){
 function renderShip(){
   if(!S.ship.alive) return;
   const sh=S.ship;
-  const SR=SHIP_R*3;
+  const u=SHIP_R*2.8;  // base unit — all ship geometry in multiples of u
 
-  // Grace-period shimmer
+  // Grace-period shield ring
   if(sh.grace>0){
     const a=sh.grace/GRACE_TIME;
     ctx.save();ctx.translate(sh.x,sh.y);
-    ctx.strokeStyle=`rgba(80,200,255,${a*0.5})`;ctx.lineWidth=2;
-    ctx.beginPath();ctx.arc(0,0,SR*2.5,0,Math.PI*2);ctx.stroke();
+    ctx.strokeStyle=`rgba(80,200,255,${a*0.45})`;ctx.lineWidth=2;
+    ctx.beginPath();ctx.arc(0,0,u*3.4,0,Math.PI*2);ctx.stroke();
     ctx.restore();
   }
 
-  ctx.save();ctx.translate(sh.x,sh.y);ctx.rotate(sh.angle);
+  ctx.save();
+  ctx.translate(sh.x,sh.y);
+  ctx.rotate(sh.angle);
 
+  const now=Date.now()/1000;
+
+  // ---- Engine exhaust (drawn first, behind hull) ----
   if(sh.thrusting&&sh.fuel>0){
-    const flicker=0.7+0.3*Math.sin(Date.now()/40);
-    const flen=(sh.thrustDir>0?26:12)*flicker;
-    const baseY=SR*sh.thrustDir,tipY=baseY+flen*sh.thrustDir;
-    const fg=ctx.createLinearGradient(0,baseY,0,tipY);
-    fg.addColorStop(0,'rgba(255,210,60,0.95)');
-    fg.addColorStop(0.5,'rgba(255,90,0,0.7)');
-    fg.addColorStop(1,'rgba(255,30,0,0)');
-    ctx.fillStyle=fg;
-    ctx.beginPath();ctx.moveTo(-8,baseY);ctx.lineTo(8,baseY);ctx.lineTo(0,tipY);
+    const flicker=0.72+0.28*Math.sin(now*38);
+    if(sh.thrustDir>0){
+      // Two nacelle exhausts
+      for(const nx of [-u*0.85, u*0.85]){
+        const flen=u*2.8*flicker;
+        const fg=ctx.createLinearGradient(nx,u*1.1,nx,u*1.1+flen);
+        fg.addColorStop(0,'rgba(120,180,255,0.95)');  // blue-white core
+        fg.addColorStop(0.3,'rgba(60,120,255,0.7)');
+        fg.addColorStop(1,'rgba(20,60,200,0)');
+        ctx.fillStyle=fg;
+        ctx.beginPath();
+        ctx.moveTo(nx-u*0.28,u*1.05);
+        ctx.lineTo(nx+u*0.28,u*1.05);
+        ctx.lineTo(nx+u*0.10,u*1.1+flen);
+        ctx.lineTo(nx-u*0.10,u*1.1+flen);
+        ctx.closePath();ctx.fill();
+        // Inner white core
+        ctx.fillStyle=`rgba(200,220,255,${0.9*flicker})`;
+        ctx.beginPath();ctx.arc(nx,u*1.08,u*0.18,0,Math.PI*2);ctx.fill();
+      }
+    } else {
+      // Forward retro burn at nose
+      const fg=ctx.createLinearGradient(0,-u*2.0,0,-u*2.0-u*1.2*flicker);
+      fg.addColorStop(0,'rgba(255,200,80,0.8)');
+      fg.addColorStop(1,'rgba(255,100,0,0)');
+      ctx.fillStyle=fg;
+      ctx.beginPath();
+      ctx.moveTo(-u*0.2,-u*2.0);ctx.lineTo(u*0.2,-u*2.0);
+      ctx.lineTo(0,-u*2.0-u*1.2*flicker);
+      ctx.closePath();ctx.fill();
+    }
+  }
+
+  // ---- Delta wings ----
+  ctx.fillStyle='#8899bb';ctx.strokeStyle='#4466aa';ctx.lineWidth=1;
+  // Left wing
+  ctx.beginPath();
+  ctx.moveTo(-u*0.45, u*0.1);
+  ctx.lineTo(-u*2.8,  u*1.05);
+  ctx.lineTo(-u*0.85, u*1.15);
+  ctx.closePath();ctx.fill();ctx.stroke();
+  // Right wing
+  ctx.beginPath();
+  ctx.moveTo(u*0.45,  u*0.1);
+  ctx.lineTo(u*2.8,   u*1.05);
+  ctx.lineTo(u*0.85,  u*1.15);
+  ctx.closePath();ctx.fill();ctx.stroke();
+
+  // Wing strakes (small inner fin)
+  ctx.fillStyle='#aabbcc';
+  for(const s of [-1,1]){
+    ctx.beginPath();
+    ctx.moveTo(s*u*0.4, u*0.1);
+    ctx.lineTo(s*u*1.3, u*0.85);
+    ctx.lineTo(s*u*0.85,u*1.15);
     ctx.closePath();ctx.fill();
   }
 
-  if(sh.laserCooldown>0){
-    const pct=sh.laserCooldown/LASER_COOL;
-    ctx.strokeStyle=`rgba(0,255,180,${pct*0.5})`;ctx.lineWidth=2;
-    ctx.beginPath();ctx.arc(0,0,SR*1.8,0,Math.PI*2);ctx.stroke();
+  // ---- Nacelles (engine pods) ----
+  ctx.fillStyle='#667799';ctx.strokeStyle='#334466';ctx.lineWidth=1;
+  for(const nx of [-u*0.85, u*0.85]){
+    ctx.beginPath();
+    if(ctx.roundRect) ctx.roundRect(nx-u*0.3,u*0.55,u*0.6,u*0.65,u*0.15);
+    else              ctx.rect(nx-u*0.3,u*0.55,u*0.6,u*0.65);
+    ctx.fill();ctx.stroke();
+    // Nozzle ring glow
+    const glow=sh.thrusting&&sh.fuel>0;
+    ctx.strokeStyle=glow?'rgba(100,160,255,0.8)':'rgba(60,80,120,0.6)';
+    ctx.lineWidth=glow?2:1;
+    ctx.beginPath();ctx.arc(nx,u*1.08,u*0.22,0,Math.PI*2);ctx.stroke();
+    ctx.strokeStyle='#334466';ctx.lineWidth=1;
   }
 
-  ctx.fillStyle='#e8e8ff';ctx.strokeStyle='#5577bb';ctx.lineWidth=1.5;
+  // ---- Main fuselage ----
+  const hullGrad=ctx.createLinearGradient(-u*0.5,-u*2.1,u*0.5,u*1.0);
+  hullGrad.addColorStop(0,'#dde8ff');
+  hullGrad.addColorStop(0.5,'#c8d8f0');
+  hullGrad.addColorStop(1,'#8899bb');
+  ctx.fillStyle=hullGrad;ctx.strokeStyle='#445577';ctx.lineWidth=1.5;
   ctx.beginPath();
-  ctx.moveTo(0,-SR*1.6);ctx.lineTo(SR,SR);ctx.lineTo(-SR,SR);
+  ctx.moveTo(0,       -u*2.2);   // nose tip
+  ctx.lineTo(u*0.55,  -u*1.2);   // shoulder right
+  ctx.lineTo(u*0.65,   u*0.6);   // waist right
+  ctx.lineTo(u*0.45,   u*1.1);   // tail right
+  ctx.lineTo(-u*0.45,  u*1.1);   // tail left
+  ctx.lineTo(-u*0.65,  u*0.6);   // waist left
+  ctx.lineTo(-u*0.55, -u*1.2);   // shoulder left
   ctx.closePath();ctx.fill();ctx.stroke();
-  ctx.fillStyle='#88bbff';
-  ctx.beginPath();ctx.arc(0,-SR*.25,SR*.38,0,Math.PI*2);ctx.fill();
+
+  // Hull panel lines
+  ctx.strokeStyle='rgba(60,80,120,0.5)';ctx.lineWidth=0.8;
+  // Centerline
+  ctx.beginPath();ctx.moveTo(0,-u*1.8);ctx.lineTo(0,u*0.9);ctx.stroke();
+  // Cross-section line
+  ctx.beginPath();ctx.moveTo(-u*0.5,u*0.0);ctx.lineTo(u*0.5,u*0.0);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(-u*0.55,-u*0.8);ctx.lineTo(u*0.55,-u*0.8);ctx.stroke();
+
+  // ---- Cockpit canopy ----
+  const cpGrad=ctx.createLinearGradient(-u*0.4,-u*2.1,u*0.3,-u*0.9);
+  cpGrad.addColorStop(0,'#aaccff');
+  cpGrad.addColorStop(0.4,'#3366cc');
+  cpGrad.addColorStop(1,'#0a1a44');
+  ctx.fillStyle=cpGrad;ctx.strokeStyle='#334488';ctx.lineWidth=1;
+  ctx.beginPath();
+  ctx.moveTo(0,      -u*2.15);
+  ctx.lineTo(u*0.42, -u*1.25);
+  ctx.lineTo(-u*0.42,-u*1.25);
+  ctx.closePath();ctx.fill();ctx.stroke();
+  // Canopy highlight
+  ctx.fillStyle='rgba(200,230,255,0.35)';
+  ctx.beginPath();
+  ctx.moveTo(-u*0.08,-u*2.05);
+  ctx.lineTo( u*0.08,-u*2.05);
+  ctx.lineTo( u*0.10,-u*1.55);
+  ctx.lineTo(-u*0.10,-u*1.55);
+  ctx.closePath();ctx.fill();
+
+  // ---- Nav lights ----
+  ctx.fillStyle='#ff3333'; // port red
+  ctx.beginPath();ctx.arc(-u*2.65,u*0.95,u*0.18,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#33ff88'; // starboard green
+  ctx.beginPath();ctx.arc( u*2.65,u*0.95,u*0.18,0,Math.PI*2);ctx.fill();
+  // Tail strobe (white, blinks)
+  if(Math.floor(now*2)%2===0){
+    ctx.fillStyle='rgba(255,255,255,0.9)';
+    ctx.beginPath();ctx.arc(0,u*1.05,u*0.12,0,Math.PI*2);ctx.fill();
+  }
+
+  // ---- Laser cooldown ring ----
+  if(sh.laserCooldown>0){
+    const pct=sh.laserCooldown/LASER_COOL;
+    ctx.strokeStyle=`rgba(0,255,180,${pct*0.55})`;ctx.lineWidth=2;
+    ctx.beginPath();ctx.arc(0,0,u*3.2,0,Math.PI*2);ctx.stroke();
+  }
+
   ctx.restore();
 }
 
@@ -911,6 +1056,26 @@ function renderLasers(){
     }
   }
   ctx.shadowBlur=0;ctx.restore();
+}
+
+// Spheres of influence — shown in cheat mode as dotted circles
+// Radius where body gravity = SOI_ACCEL (10% of max thrust)
+function renderSOI(){
+  ctx.save();
+  ctx.setLineDash([6,10]);
+  for(const b of S.bodies){
+    const soiR=Math.sqrt(G*b.mass/SOI_ACCEL);
+    // Skip if circle would be tiny on screen
+    if(soiR*S.cam.zoom<20) continue;
+    let col;
+    if      (b.type==='star')     col='rgba(255,200,60,0.28)';
+    else if (b.type==='planet')   col=b.color+'55';
+    else if (b.type==='moon')     col='rgba(160,160,160,0.22)';
+    else                          col='rgba(120,100,80,0.18)';
+    ctx.strokeStyle=col; ctx.lineWidth=1.2/S.cam.zoom;
+    ctx.beginPath();ctx.arc(b.x,b.y,soiR,0,Math.PI*2);ctx.stroke();
+  }
+  ctx.setLineDash([]);ctx.restore();
 }
 
 function renderTraj(){
@@ -1022,7 +1187,7 @@ function renderHUD(){
   // ---- Cheat mode ----
   if(S.cheat){
     ctx.fillStyle=C_WARN;ctx.font='bold '+fnt(30);
-    ctx.textAlign='center';ctx.fillText('⚠  CHEAT MODE',cw/2,28);ctx.textAlign='left';
+    ctx.textAlign='center';ctx.fillText('⚠  CHEAT MODE  —  trajectory + SOI circles',cw/2,28);ctx.textAlign='left';
   }
 
   // Zoom + hint bar
@@ -1186,7 +1351,9 @@ function render(){
   if(S.phase==='menu'){renderMenu();return;}
 
   ctx.save();applyCamera();
-  renderBgStars();renderBodies();renderComets();
+  renderBgStars();
+  if(S.cheat) renderSOI();
+  renderBodies();renderComets();
   renderObjMarkers();renderLasers();
   if(S.ship.alive) renderShip();
   ctx.restore();
@@ -1244,7 +1411,7 @@ let lastTs=0;
 
 function startRun(){
   initAudio();
-  _nextNote=0;_nextLead=0;_arpStep=0;_chordStep=0;_chordIdx=0;
+  _resetMusic();
   if(S.phase==='dead'||S.phase==='win') S.runCount=(S.runCount||0)+1;
   S.phase='playing';S.cheat=false;S.showMinimap=true;
   genWorld();
