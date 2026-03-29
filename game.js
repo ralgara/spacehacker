@@ -941,141 +941,123 @@ function renderShip(){
 
   const now=Date.now()/1000;
 
-  // ---- Engine exhaust (drawn first, behind hull) ----
+  // ---- Ion drive exhaust (single central) ----
   if(sh.thrusting&&sh.fuel>0){
     const flicker=0.72+0.28*Math.sin(now*38);
     if(sh.thrustDir>0){
-      // Two nacelle exhausts
-      for(const nx of [-u*0.85, u*0.85]){
-        const flen=u*2.8*flicker;
-        const fg=ctx.createLinearGradient(nx,u*1.1,nx,u*1.1+flen);
-        fg.addColorStop(0,'rgba(120,180,255,0.95)');  // blue-white core
-        fg.addColorStop(0.3,'rgba(60,120,255,0.7)');
-        fg.addColorStop(1,'rgba(20,60,200,0)');
-        ctx.fillStyle=fg;
-        ctx.beginPath();
-        ctx.moveTo(nx-u*0.28,u*1.05);
-        ctx.lineTo(nx+u*0.28,u*1.05);
-        ctx.lineTo(nx+u*0.10,u*1.1+flen);
-        ctx.lineTo(nx-u*0.10,u*1.1+flen);
-        ctx.closePath();ctx.fill();
-        // Inner white core
-        ctx.fillStyle=`rgba(200,220,255,${0.9*flicker})`;
-        ctx.beginPath();ctx.arc(nx,u*1.08,u*0.18,0,Math.PI*2);ctx.fill();
-      }
+      const flen=u*3.2*flicker;
+      const fg=ctx.createLinearGradient(0,u*1.3,0,u*1.3+flen);
+      fg.addColorStop(0,'rgba(120,180,255,0.95)');
+      fg.addColorStop(0.35,'rgba(60,120,255,0.70)');
+      fg.addColorStop(1,'rgba(20,60,200,0)');
+      ctx.fillStyle=fg;
+      ctx.beginPath();
+      ctx.moveTo(-u*0.18,u*1.25);ctx.lineTo(u*0.18,u*1.25);
+      ctx.lineTo(u*0.06,u*1.3+flen);ctx.lineTo(-u*0.06,u*1.3+flen);
+      ctx.closePath();ctx.fill();
+      ctx.fillStyle=`rgba(200,220,255,${0.9*flicker})`;
+      ctx.beginPath();ctx.arc(0,u*1.28,u*0.16,0,Math.PI*2);ctx.fill();
     } else {
-      // Forward retro burn at nose
-      const fg=ctx.createLinearGradient(0,-u*2.0,0,-u*2.0-u*1.2*flicker);
+      const fg=ctx.createLinearGradient(0,-u*2.6,0,-u*2.6-u*0.9*flicker);
       fg.addColorStop(0,'rgba(255,200,80,0.8)');
       fg.addColorStop(1,'rgba(255,100,0,0)');
       ctx.fillStyle=fg;
       ctx.beginPath();
-      ctx.moveTo(-u*0.2,-u*2.0);ctx.lineTo(u*0.2,-u*2.0);
-      ctx.lineTo(0,-u*2.0-u*1.2*flicker);
+      ctx.moveTo(-u*0.12,-u*2.6);ctx.lineTo(u*0.12,-u*2.6);
+      ctx.lineTo(0,-u*2.6-u*0.9*flicker);
       ctx.closePath();ctx.fill();
     }
   }
 
-  // ---- Delta wings ----
-  ctx.fillStyle='#8899bb';ctx.strokeStyle='#4466aa';ctx.lineWidth=1;
-  // Left wing
-  ctx.beginPath();
-  ctx.moveTo(-u*0.45, u*0.1);
-  ctx.lineTo(-u*2.8,  u*1.05);
-  ctx.lineTo(-u*0.85, u*1.15);
-  ctx.closePath();ctx.fill();ctx.stroke();
-  // Right wing
-  ctx.beginPath();
-  ctx.moveTo(u*0.45,  u*0.1);
-  ctx.lineTo(u*2.8,   u*1.05);
-  ctx.lineTo(u*0.85,  u*1.15);
-  ctx.closePath();ctx.fill();ctx.stroke();
+  // ---- Solar panel booms ----
+  // Struts
+  ctx.fillStyle='#445566';
+  ctx.fillRect( u*0.30,-u*0.50, u*1.45, u*0.10);   // right strut
+  ctx.fillRect(-u*1.75,-u*0.50, u*1.45, u*0.10);   // left strut
+  // Panel cells
+  ctx.fillStyle='#0d2040';ctx.strokeStyle='#1a4070';ctx.lineWidth=0.8;
+  ctx.fillRect( u*1.75,-u*0.68, u*0.75, u*0.56);ctx.strokeRect( u*1.75,-u*0.68,u*0.75,u*0.56);
+  ctx.fillRect(-u*2.50,-u*0.68, u*0.75, u*0.56);ctx.strokeRect(-u*2.50,-u*0.68,u*0.75,u*0.56);
+  // Cell dividers
+  ctx.strokeStyle='#1a3a60';ctx.lineWidth=0.5;
+  for(const dx of [u*2.00,u*2.25]){
+    ctx.beginPath();ctx.moveTo( dx,-u*0.68);ctx.lineTo( dx,-u*0.12);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(-dx,-u*0.68);ctx.lineTo(-dx,-u*0.12);ctx.stroke();
+  }
+  // Panel highlight sheen
+  ctx.fillStyle='rgba(60,120,200,0.15)';
+  ctx.fillRect( u*1.75,-u*0.68, u*0.75, u*0.18);
+  ctx.fillRect(-u*2.50,-u*0.68, u*0.75, u*0.18);
 
-  // Wing strakes (small inner fin)
-  ctx.fillStyle='#aabbcc';
+  // ---- Tail stabilizer fins (small, paired) ----
+  ctx.fillStyle='#556677';ctx.strokeStyle='#334455';ctx.lineWidth=0.8;
   for(const s of [-1,1]){
     ctx.beginPath();
-    ctx.moveTo(s*u*0.4, u*0.1);
-    ctx.lineTo(s*u*1.3, u*0.85);
-    ctx.lineTo(s*u*0.85,u*1.15);
-    ctx.closePath();ctx.fill();
+    ctx.moveTo(s*u*0.28, u*0.80);
+    ctx.lineTo(s*u*0.65, u*1.10);
+    ctx.lineTo(s*u*0.26, u*1.30);
+    ctx.closePath();ctx.fill();ctx.stroke();
   }
 
-  // ---- Nacelles (engine pods) ----
-  ctx.fillStyle='#667799';ctx.strokeStyle='#334466';ctx.lineWidth=1;
-  for(const nx of [-u*0.85, u*0.85]){
-    ctx.beginPath();
-    if(ctx.roundRect) ctx.roundRect(nx-u*0.3,u*0.55,u*0.6,u*0.65,u*0.15);
-    else              ctx.rect(nx-u*0.3,u*0.55,u*0.6,u*0.65);
-    ctx.fill();ctx.stroke();
-    // Nozzle ring glow
-    const glow=sh.thrusting&&sh.fuel>0;
-    ctx.strokeStyle=glow?'rgba(100,160,255,0.8)':'rgba(60,80,120,0.6)';
-    ctx.lineWidth=glow?2:1;
-    ctx.beginPath();ctx.arc(nx,u*1.08,u*0.22,0,Math.PI*2);ctx.stroke();
-    ctx.strokeStyle='#334466';ctx.lineWidth=1;
-  }
-
-  // ---- Main fuselage ----
-  const hullGrad=ctx.createLinearGradient(-u*0.5,-u*2.1,u*0.5,u*1.0);
+  // ---- Main fuselage (narrow elongated probe body) ----
+  const hullGrad=ctx.createLinearGradient(-u*0.32,-u*2.5,u*0.32,u*1.2);
   hullGrad.addColorStop(0,'#dde8ff');
-  hullGrad.addColorStop(0.5,'#c8d8f0');
-  hullGrad.addColorStop(1,'#8899bb');
-  ctx.fillStyle=hullGrad;ctx.strokeStyle='#445577';ctx.lineWidth=1.5;
+  hullGrad.addColorStop(0.45,'#c0d0e8');
+  hullGrad.addColorStop(1,'#778899');
+  ctx.fillStyle=hullGrad;ctx.strokeStyle='#445566';ctx.lineWidth=1.2;
   ctx.beginPath();
-  ctx.moveTo(0,       -u*2.2);   // nose tip
-  ctx.lineTo(u*0.55,  -u*1.2);   // shoulder right
-  ctx.lineTo(u*0.65,   u*0.6);   // waist right
-  ctx.lineTo(u*0.45,   u*1.1);   // tail right
-  ctx.lineTo(-u*0.45,  u*1.1);   // tail left
-  ctx.lineTo(-u*0.65,  u*0.6);   // waist left
-  ctx.lineTo(-u*0.55, -u*1.2);   // shoulder left
+  ctx.moveTo(0,        -u*2.7);  // nose tip
+  ctx.lineTo( u*0.22,  -u*2.0);  // upper shoulder
+  ctx.lineTo( u*0.30,  -u*0.8);  // mid right
+  ctx.lineTo( u*0.28,   u*0.6);  // waist right
+  ctx.lineTo( u*0.20,   u*1.30); // tail right
+  ctx.lineTo(-u*0.20,   u*1.30); // tail left
+  ctx.lineTo(-u*0.28,   u*0.6);  // waist left
+  ctx.lineTo(-u*0.30,  -u*0.8);  // mid left
+  ctx.lineTo(-u*0.22,  -u*2.0);  // upper shoulder
   ctx.closePath();ctx.fill();ctx.stroke();
+
+  // Engine nozzle bell
+  ctx.fillStyle='#556688';ctx.strokeStyle='#334455';ctx.lineWidth=1;
+  ctx.beginPath();
+  ctx.moveTo(-u*0.18,u*1.25);ctx.lineTo(u*0.18,u*1.25);
+  ctx.lineTo(u*0.22,u*1.36);ctx.lineTo(-u*0.22,u*1.36);
+  ctx.closePath();ctx.fill();ctx.stroke();
+  const thrGlow=sh.thrusting&&sh.fuel>0;
+  ctx.strokeStyle=thrGlow?'rgba(100,160,255,0.85)':'rgba(60,80,120,0.55)';
+  ctx.lineWidth=thrGlow?2:1;
+  ctx.beginPath();ctx.arc(0,u*1.33,u*0.18,0,Math.PI*2);ctx.stroke();
 
   // Hull panel lines
-  ctx.strokeStyle='rgba(60,80,120,0.5)';ctx.lineWidth=0.8;
-  // Centerline
-  ctx.beginPath();ctx.moveTo(0,-u*1.8);ctx.lineTo(0,u*0.9);ctx.stroke();
-  // Cross-section line
-  ctx.beginPath();ctx.moveTo(-u*0.5,u*0.0);ctx.lineTo(u*0.5,u*0.0);ctx.stroke();
-  ctx.beginPath();ctx.moveTo(-u*0.55,-u*0.8);ctx.lineTo(u*0.55,-u*0.8);ctx.stroke();
+  ctx.strokeStyle='rgba(60,80,120,0.45)';ctx.lineWidth=0.7;
+  ctx.beginPath();ctx.moveTo(0,-u*2.2);ctx.lineTo(0,u*1.0);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(-u*0.27,-u*0.5);ctx.lineTo(u*0.27,-u*0.5);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(-u*0.28, u*0.3);ctx.lineTo(u*0.28, u*0.3);ctx.stroke();
 
-  // ---- Cockpit canopy ----
-  const cpGrad=ctx.createLinearGradient(-u*0.4,-u*2.1,u*0.3,-u*0.9);
-  cpGrad.addColorStop(0,'#aaccff');
-  cpGrad.addColorStop(0.4,'#3366cc');
-  cpGrad.addColorStop(1,'#0a1a44');
-  ctx.fillStyle=cpGrad;ctx.strokeStyle='#334488';ctx.lineWidth=1;
-  ctx.beginPath();
-  ctx.moveTo(0,      -u*2.15);
-  ctx.lineTo(u*0.42, -u*1.25);
-  ctx.lineTo(-u*0.42,-u*1.25);
-  ctx.closePath();ctx.fill();ctx.stroke();
-  // Canopy highlight
-  ctx.fillStyle='rgba(200,230,255,0.35)';
-  ctx.beginPath();
-  ctx.moveTo(-u*0.08,-u*2.05);
-  ctx.lineTo( u*0.08,-u*2.05);
-  ctx.lineTo( u*0.10,-u*1.55);
-  ctx.lineTo(-u*0.10,-u*1.55);
-  ctx.closePath();ctx.fill();
+  // ---- Sensor dome (nose) ----
+  const sGrad=ctx.createRadialGradient(-u*0.05,-u*2.62,0,0,-u*2.55,u*0.22);
+  sGrad.addColorStop(0,'#aaccff');sGrad.addColorStop(0.5,'#2255bb');sGrad.addColorStop(1,'#0a1a44');
+  ctx.fillStyle=sGrad;ctx.strokeStyle='#334488';ctx.lineWidth=1;
+  ctx.beginPath();ctx.arc(0,-u*2.55,u*0.22,0,Math.PI*2);ctx.fill();ctx.stroke();
+  ctx.fillStyle='rgba(200,230,255,0.40)';
+  ctx.beginPath();ctx.arc(-u*0.07,-u*2.64,u*0.08,0,Math.PI*2);ctx.fill();
 
-  // ---- Nav lights ----
-  ctx.fillStyle='#ff3333'; // port red
-  ctx.beginPath();ctx.arc(-u*2.65,u*0.95,u*0.18,0,Math.PI*2);ctx.fill();
-  ctx.fillStyle='#33ff88'; // starboard green
-  ctx.beginPath();ctx.arc( u*2.65,u*0.95,u*0.18,0,Math.PI*2);ctx.fill();
-  // Tail strobe (white, blinks)
+  // ---- Nav lights (at solar panel tips) ----
+  ctx.fillStyle='#ff3333';
+  ctx.beginPath();ctx.arc(-u*2.50,-u*0.40,u*0.15,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#33ff88';
+  ctx.beginPath();ctx.arc( u*2.50,-u*0.40,u*0.15,0,Math.PI*2);ctx.fill();
+  // Tail strobe
   if(Math.floor(now*2)%2===0){
     ctx.fillStyle='rgba(255,255,255,0.9)';
-    ctx.beginPath();ctx.arc(0,u*1.05,u*0.12,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.arc(0,u*1.26,u*0.10,0,Math.PI*2);ctx.fill();
   }
 
   // ---- Laser cooldown ring ----
   if(sh.laserCooldown>0){
     const pct=sh.laserCooldown/LASER_COOL;
     ctx.strokeStyle=`rgba(0,255,180,${pct*0.55})`;ctx.lineWidth=2;
-    ctx.beginPath();ctx.arc(0,0,u*3.2,0,Math.PI*2);ctx.stroke();
+    ctx.beginPath();ctx.arc(0,0,u*3.0,0,Math.PI*2);ctx.stroke();
   }
 
   ctx.restore();
