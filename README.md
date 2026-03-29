@@ -1,4 +1,4 @@
-# Spacehacker v2.1.0
+# Spacehacker
 
 A 2D gravity-assist strategy game. Pilot a spacecraft through procedurally generated solar systems, use the gravity wells of planets to slingshot yourself toward your objective, and try not to become debris.
 
