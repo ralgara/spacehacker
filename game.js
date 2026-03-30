@@ -327,7 +327,7 @@ function updateAudio(dt) {
   AUD.filt.frequency.setTargetAtTime(500+(1-prox)*1800, AUD.ctx.currentTime, 0.7);
 
   // Thrust noise
-  const thr = S.ship.thrusting && S.ship.fuel>0;
+  const thr = S.ship.alive && S.ship.thrusting && S.ship.fuel>0;
   AUD.nGain.gain.setTargetAtTime(thr?0.13:0, AUD.ctx.currentTime, 0.09);
 }
 
