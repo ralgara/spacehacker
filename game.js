@@ -1224,14 +1224,40 @@ function renderHUD(){
 
   // ---- Fuel bar ----
   const fw=300,fh=22,fx=22,fy=22;
-  ctx.fillStyle='#0a0f1a';ctx.fillRect(fx,fy,fw,fh);
   const fp=sh.fuel/FUEL_MAX;
-  const fc=fp>0.5?'#22ffbb':fp>0.25?'#ffaa00':C_WARN;
-  ctx.fillStyle=fc;ctx.fillRect(fx,fy,fw*fp,fh);
-  ctx.strokeStyle='#1a3355';ctx.lineWidth=1;ctx.strokeRect(fx,fy,fw,fh);
+  const now_ms=Date.now();
+
+  // Blink timing: slow at <10%, fast at <3%
+  const blinkSlow = Math.floor(now_ms/500)%2===0;   // 1 Hz
+  const blinkFast = Math.floor(now_ms/165)%2===0;   // ~3 Hz
+  const isLow      = fp<0.10;
+  const isCritical = fp<0.03;
+  const isAlarm    = fp<0.01;
+  const barVisible = isCritical ? blinkFast : (isLow ? blinkSlow : true);
+
+  // Bar color
+  let fc;
+  if(isCritical)       fc='#ff2233';
+  else if(isLow)       fc='#ffdd00';
+  else if(fp>0.50)     fc='#22ffbb';
+  else if(fp>0.25)     fc='#ffaa00';
+  else                 fc=C_WARN;
+
+  ctx.fillStyle='#0a0f1a';ctx.fillRect(fx,fy,fw,fh);
+  if(barVisible) { ctx.fillStyle=fc;ctx.fillRect(fx,fy,fw*fp,fh); }
+  ctx.strokeStyle=isLow?fc:'#1a3355';ctx.lineWidth=1;ctx.strokeRect(fx,fy,fw,fh);
+
   ctx.fillStyle=C_LABEL;ctx.font=fnt(20);ctx.fillText('FUEL',fx+fw+10,fy+10);
   ctx.fillStyle=fc;ctx.font=fnt(18);
   ctx.fillText(`${Math.ceil(sh.fuel)} / ${FUEL_MAX}  ·  ${Math.floor(fp*100)}%`,fx+fw+10,fy+26);
+
+  // CRITICAL label
+  if(isAlarm){
+    ctx.fillStyle=`rgba(255,30,40,${blinkFast?1:0.4})`;
+    ctx.font='bold '+fnt(22);ctx.textAlign='center';
+    ctx.fillText('CRITICAL',fx+fw/2,fy+16);
+    ctx.textAlign='left';
+  }
 
   // Fuel bonus popups
   for(const p of S.fuelPopups){
@@ -1240,9 +1266,9 @@ function renderHUD(){
     ctx.fillText(`+${p.amount} FUEL`,fx,fy-12-p.dy);
   }
 
-  // Low-fuel screen flash
-  if(fp<0.15&&Math.floor(Date.now()/400)%2===0){
-    ctx.fillStyle='rgba(255,60,60,0.12)';ctx.fillRect(0,0,cw,ch);
+  // Low-fuel screen pulse (only below 3%, synced to fast blink)
+  if(isCritical&&blinkFast){
+    ctx.fillStyle='rgba(255,40,40,0.10)';ctx.fillRect(0,0,cw,ch);
   }
 
   // Laser cooldown bar
