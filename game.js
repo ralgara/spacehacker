@@ -922,15 +922,20 @@ function renderBodies(){
       // Subtle halo so small asteroids stay visible
       ctx.fillStyle='rgba(136,119,102,0.25)';
       ctx.beginPath();ctx.arc(x,y,r*1.5,0,Math.PI*2);ctx.fill();
-      ctx.fillStyle=b.color;
-      ctx.beginPath();
-      const sides=6;
-      for(let i=0;i<sides;i++){
-        const a=(i/sides)*Math.PI*2, rr=r*(0.68+0.32*Math.sin(i*2.5+x*0.01));
-        i===0?ctx.moveTo(x+Math.cos(a)*rr,y+Math.sin(a)*rr):ctx.lineTo(x+Math.cos(a)*rr,y+Math.sin(a)*rr);
+      if(spriteOk('asteroid')){
+        const sz=r*2.2;
+        ctx.drawImage(ASSETS.asteroid,x-sz/2,y-sz/2,sz,sz);
+      } else {
+        ctx.fillStyle=b.color;
+        ctx.beginPath();
+        const sides=6;
+        for(let i=0;i<sides;i++){
+          const a=(i/sides)*Math.PI*2, rr=r*(0.68+0.32*Math.sin(i*2.5+x*0.01));
+          i===0?ctx.moveTo(x+Math.cos(a)*rr,y+Math.sin(a)*rr):ctx.lineTo(x+Math.cos(a)*rr,y+Math.sin(a)*rr);
+        }
+        ctx.closePath();ctx.fill();
+        ctx.strokeStyle=shadeColor(b.color,30);ctx.lineWidth=1;ctx.stroke();
       }
-      ctx.closePath();ctx.fill();
-      ctx.strokeStyle=shadeColor(b.color,30);ctx.lineWidth=1;ctx.stroke();
     }
   }
 }
@@ -1705,4 +1710,4 @@ function init(){
   requestAnimationFrame(ts=>{lastTs=ts;loop(ts);});
 }
 
-loadAssets([['ship','assets/ship.webp'],['station','assets/station.webp']], init);
+loadAssets([['ship','assets/ship.webp'],['station','assets/station.webp'],['asteroid','assets/asteroid.webp']], init);
