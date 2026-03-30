@@ -60,16 +60,18 @@ const CONFIG = {
   cometRate:  1.0,   // multiplier on comet frequency (0 = off)
   music:      true,
   showFPS:    false,
-  fuelMax:    1000,  // ship fuel capacity
-  refuelMult: 1.0,   // multiplier on all fuel rewards
-  mapSize:    12000, // applied at next genWorld()
+  fuelMax:      1000,  // ship fuel capacity
+  refuelMult:   1.0,   // multiplier on all fuel rewards
+  mapSize:      12000, // applied at next genWorld()
+  bodyDensity:  1.0,   // multiplier on planet/asteroid/moon counts
 };
 
 const COMET_PRESETS  = [['Off',0],['Light',0.5],['Normal',1.0],['Heavy',2.5]];
 const GRAV_PRESETS   = [['×½',0.5],['×1',1.0],['×1½',1.5],['×2',2.0],['×3',3.0]];
-const FUEL_PRESETS   = [['500',500],['1000',1000],['2000',2000]];
-const REFUEL_PRESETS = [['×½',0.5],['×1',1.0],['×1½',1.5],['×2',2.0]];
-const MAP_PRESETS    = [['Small',8000],['Med',12000],['Large',20000],['Huge',40000]];
+const FUEL_PRESETS    = [['500',500],['1000',1000],['2000',2000]];
+const REFUEL_PRESETS  = [['×½',0.5],['×1',1.0],['×1½',1.5],['×2',2.0]];
+const MAP_PRESETS     = [['Small',8000],['Med',12000],['Large',20000],['Huge',40000]];
+const DENSITY_PRESETS = [['Sparse',0.5],['Normal',1.0],['Dense',1.5],['Packed',2.0]];
 
 // ================================================================
 // UI STATE
@@ -425,6 +427,7 @@ function initState() {
     cometTimer:0, nextComet:rn(COMET_MIN,COMET_MAX),
     bgStars:[], fuelPopups:[], death:null,
     nearEdge:false, edgeAlarmTimer:0,
+    docking:null,
   };
 }
 
@@ -440,14 +443,16 @@ function genWorld() {
   for(let i=0;i<2500;i++)
     S.bgStars.push({x:nr()*MAP,y:nr()*MAP,r:nr()*1.5+0.3,a:nr()*0.7+0.3});
 
-  S.nearEdge=false; S.edgeAlarmTimer=0;
+  S.nearEdge=false; S.edgeAlarmTimer=0; S.docking=null;
 
   // Star
   const stx=MAP/2+rn(-300,300), sty=MAP/2+rn(-300,300);
   S.bodies.push({type:'star',x:stx,y:sty,mass:10000,radius:80,color:'#fff5bb',glow:'#ff8800',parentIdx:-1});
 
   // Planets + moons
-  const rings=[950,1400,1950,2550,3200], pCount=ri(3,5);
+  const rings=[950,1400,1950,2550,3200];
+  const dens=CONFIG.bodyDensity;
+  const pCount=clamp(Math.round(ri(3,5)*dens),1,rings.length);
   const pCols=[...PLANET_COLORS].sort(()=>nr()-0.5);
   const planetIdxs=[];
   for(let i=0;i<pCount;i++){
@@ -459,7 +464,8 @@ function genWorld() {
       y:clamp(sty+Math.sin(ang)*d,300,MAP-300),
       mass:1000,radius:rn(26,46),color:pCols[i],glow:pCols[i],parentIdx:0,
     });
-    for(let j=0;j<ri(1,4);j++){
+    const moonCount=clamp(Math.round(ri(1,4)*dens),0,7);
+    for(let j=0;j<moonCount;j++){
       const orR=S.bodies[pi].radius*DRAW_SCALE+rn(160,480),orA=ra();
       const retrograde=nr()<0.08;  // ~8% chance of retrograde orbit
       const orS=rn(0.08,0.22)*(retrograde?-1:1);
@@ -476,11 +482,13 @@ function genWorld() {
 
   // Asteroid clusters — kept away from map edges (400+ margin)
   const asteroidIdxs=[];
-  for(let c=0;c<ri(3,5);c++){
+  const clusterCount=clamp(Math.round(ri(3,5)*dens),1,10);
+  for(let c=0;c<clusterCount;c++){
     let cx,cy,att=0;
     do{cx=rn(600,MAP-600);cy=rn(600,MAP-600);att++;}
     while(dist(cx,cy,stx,sty)<700&&att<30);
-    for(let j=0;j<ri(5,10);j++){
+    const perCluster=clamp(Math.round(ri(5,10)*dens),2,20);
+    for(let j=0;j<perCluster;j++){
       const ai=S.bodies.length;
       S.bodies.push({
         type:'asteroid',
@@ -585,6 +593,12 @@ function updatePhysics(dt){
   if(!sh.alive) return;
   if(sh.laserCooldown>0) sh.laserCooldown-=dt;
   if(sh.grace>0){sh.grace-=dt; if(sh.grace<0)sh.grace=0;}
+
+  if(S.docking){
+    sh.x=S.docking.x; sh.y=S.docking.y;
+    sh.vx=0; sh.vy=0; sh.thrusting=false;
+    return;
+  }
 
   if(keys.KeyA||keys.ArrowLeft)  sh.angle-=ROT_SPEED*dt;
   if(keys.KeyD||keys.ArrowRight) sh.angle+=ROT_SPEED*dt;
@@ -734,14 +748,22 @@ function updateObjectives(dt){
   const sh=S.ship;
   for(const obj of S.objectives){
     if(obj.complete) continue;
-    if(obj.type==='reach'||obj.type==='collect'){
+    if(obj.type==='reach'){
+      if(S.docking) continue;
       const d=dist(sh.x,sh.y,obj.x,obj.y);
-      if(d<DOCK_RADIUS){
+      if(d<DOCK_RADIUS&&d>0.1){
         const nx=(obj.x-sh.x)/d, ny=(obj.y-sh.y)/d;
         const hdx=Math.sin(sh.angle), hdy=-Math.cos(sh.angle);
         const dot=hdx*nx+hdy*ny;
-        if(Math.abs(dot)>=DOCK_ALIGN && Math.hypot(sh.vx,sh.vy)<DOCK_SPEED) completObj(obj);
+        if(Math.abs(dot)>=DOCK_ALIGN && Math.hypot(sh.vx,sh.vy)<DOCK_SPEED){
+          const fuelTarget=Math.min(CONFIG.fuelMax,sh.fuel+obj.fuelReward);
+          S.docking={obj,x:sh.x,y:sh.y,timer:0,
+            duration:obj.fuelReward>0?2.2:0.9,
+            fuelStart:sh.fuel, fuelTarget};
+        }
       }
+    } else if(obj.type==='collect'){
+      if(dist(sh.x,sh.y,obj.x,obj.y)<DOCK_RADIUS) completObj(obj);
     } else if(obj.type==='mine'){
       if(obj.targetIdx<0||obj.targetIdx>=S.bodies.length){obj.complete=true;continue;}
       const tgt=S.bodies[obj.targetIdx];
@@ -809,6 +831,22 @@ function updateEdgeWarning(dt){
     if(S.edgeAlarmTimer<=0){playEdgeAlarm();S.edgeAlarmTimer=2.5;}
   } else {
     S.edgeAlarmTimer=0;
+  }
+}
+
+function updateDocking(dt){
+  if(!S.docking) return;
+  const d=S.docking;
+  d.timer=Math.min(d.timer+dt, d.duration);
+  const progress=d.timer/d.duration;
+  S.ship.fuel=d.fuelStart+(d.fuelTarget-d.fuelStart)*progress;
+  if(d.timer>=d.duration){
+    S.ship.fuel=d.fuelTarget;
+    d.obj.complete=true; S.objectivesDone++;
+    if(d.fuelTarget>d.fuelStart)
+      S.fuelPopups.push({amount:Math.round(d.fuelTarget-d.fuelStart),alpha:1.0,dy:0});
+    playChime();
+    S.docking=null;
   }
 }
 
@@ -1016,8 +1054,8 @@ function renderObjMarkers(){
     if(obj.complete) continue;
     const pulse=0.55+0.45*Math.sin(t*2);
 
-    if(obj.type==='reach'||obj.type==='collect'){
-      // Unified station — same size for both types
+    if(obj.type==='reach'){
+      // Station sprite
       const sz=64;
       if(spriteOk('station')){
         ctx.drawImage(ASSETS.station,obj.x-sz/2,obj.y-sz/2,sz,sz);
@@ -1029,10 +1067,9 @@ function renderObjMarkers(){
         ctx.moveTo(obj.x,obj.y-20);ctx.lineTo(obj.x,obj.y+20);
         ctx.stroke();
       }
-      ctx.globalAlpha=1;
 
-      // Docking guide — visible when ship is within 4× dock radius
-      if(S.ship.alive){
+      // Docking guide — visible when ship is within 4× dock radius, not yet docking
+      if(S.ship.alive&&!S.docking){
         const sh=S.ship;
         const dd=dist(sh.x,sh.y,obj.x,obj.y);
         if(dd<DOCK_RADIUS*4&&dd>0.1){
@@ -1042,33 +1079,26 @@ function renderObjMarkers(){
           const aligned=Math.abs(dot)>=DOCK_ALIGN;
           const slow=Math.hypot(sh.vx,sh.vy)<DOCK_SPEED;
           const col=aligned&&slow?'#00ff88':aligned?'#ffee00':'#556677';
-
-          // Two approach arrows (front and rear entry points on station)
-          const arrowAng=Math.atan2(ny,nx); // direction ship→station
-          ctx.save();
-          ctx.globalAlpha=0.88;
+          const arrowAng=Math.atan2(ny,nx);
+          ctx.save();ctx.globalAlpha=0.88;
           for(const flip of [0,Math.PI]){
             const ax=obj.x+Math.cos(arrowAng+flip)*(sz/2+18);
             const ay=obj.y+Math.sin(arrowAng+flip)*(sz/2+18);
-            ctx.save();
-            ctx.translate(ax,ay);
-            ctx.rotate(arrowAng+flip+Math.PI); // point inward
-            ctx.fillStyle=col;ctx.strokeStyle=col;ctx.lineWidth=1.5;
+            ctx.save();ctx.translate(ax,ay);ctx.rotate(arrowAng+flip+Math.PI);
+            ctx.fillStyle=col;ctx.lineWidth=1.5;
             ctx.beginPath();
             ctx.moveTo(0,-9);ctx.lineTo(7,7);ctx.lineTo(0,2);ctx.lineTo(-7,7);
             ctx.closePath();ctx.fill();
             ctx.restore();
           }
           ctx.restore();
-
-          // Status badge when close
           if(dd<DOCK_RADIUS*1.5){
             ctx.font='bold '+fnt(17);ctx.textAlign='center';
             if(aligned&&slow){
-              ctx.fillStyle='#00ff88';ctx.fillText('DOCKING',obj.x,obj.y-sz/2-10);
+              ctx.fillStyle='#00ff88';ctx.fillText('DOCKING...',obj.x,obj.y-sz/2-10);
             } else if(aligned){
-              const spd=Math.hypot(sh.vx,sh.vy).toFixed(0);
-              ctx.fillStyle='#ffee00';ctx.fillText(`SLOW DOWN  ${spd}`,obj.x,obj.y-sz/2-10);
+              ctx.fillStyle='#ffee00';
+              ctx.fillText(`SLOW DOWN  ${Math.hypot(sh.vx,sh.vy).toFixed(0)}`,obj.x,obj.y-sz/2-10);
             } else {
               ctx.fillStyle='#556677';ctx.fillText('ALIGN NOSE / TAIL',obj.x,obj.y-sz/2-10);
             }
@@ -1076,6 +1106,26 @@ function renderObjMarkers(){
           }
         }
       }
+
+    } else if(obj.type==='collect'){
+      // Resource pod — spinning double hexagon
+      const podR=22;
+      ctx.save();ctx.translate(obj.x,obj.y);ctx.rotate(t*0.9);
+      ctx.strokeStyle=obj.color;ctx.lineWidth=2.5;
+      ctx.beginPath();
+      for(let i=0;i<6;i++){const a=(i/6)*Math.PI*2;i===0?ctx.moveTo(Math.cos(a)*podR,Math.sin(a)*podR):ctx.lineTo(Math.cos(a)*podR,Math.sin(a)*podR);}
+      ctx.closePath();ctx.stroke();
+      ctx.rotate(Math.PI/6);
+      ctx.strokeStyle=obj.color+'88';ctx.lineWidth=1.5;
+      ctx.beginPath();
+      for(let i=0;i<6;i++){const a=(i/6)*Math.PI*2;i===0?ctx.moveTo(Math.cos(a)*(podR*0.52),Math.sin(a)*(podR*0.52)):ctx.lineTo(Math.cos(a)*(podR*0.52),Math.sin(a)*(podR*0.52));}
+      ctx.closePath();ctx.stroke();
+      const grd=ctx.createRadialGradient(0,0,0,0,0,podR*0.5);
+      grd.addColorStop(0,'rgba(255,255,100,0.35)');grd.addColorStop(1,'rgba(255,220,0,0)');
+      ctx.fillStyle=grd;ctx.beginPath();ctx.arc(0,0,podR*0.5,0,Math.PI*2);ctx.fill();
+      ctx.restore();
+      ctx.strokeStyle=obj.color+'44';ctx.lineWidth=1;
+      ctx.beginPath();ctx.arc(obj.x,obj.y,podR*1.6,0,Math.PI*2);ctx.stroke();
 
     } else if(obj.type==='mine'){
       if(obj.targetIdx<0||obj.targetIdx>=S.bodies.length) continue;
@@ -1664,7 +1714,7 @@ function _cfgBtn(label,active,x,y,w,h,action){
 
 function renderConfig(){
   const cw=canvas.width,ch=canvas.height;
-  const pw=480,ph=510,px=(cw-pw)/2,py=(ch-ph)/2;
+  const pw=480,ph=556,px=(cw-pw)/2,py=(ch-ph)/2;
   _configBtns=[];
 
   ctx.fillStyle='rgba(4,8,20,0.96)';
@@ -1745,6 +1795,15 @@ function renderConfig(){
     _cfgBtn(lbl,CONFIG.mapSize===val,lx+labelW+i*(mw+gap),row,mw,bh,()=>{CONFIG.mapSize=val;});
   });
 
+  row+=bh+10;
+  // Body density
+  ctx.fillStyle=C_VALUE;ctx.font=fnt(21);ctx.textAlign='left';
+  ctx.fillText('BODIES',lx,row+bh*0.67);
+  const dw=72;
+  DENSITY_PRESETS.forEach(([lbl,val],i)=>{
+    _cfgBtn(lbl,CONFIG.bodyDensity===val,lx+labelW+i*(dw+gap),row,dw,bh,()=>{CONFIG.bodyDensity=val;});
+  });
+
   ctx.textAlign='left';
 }
 
@@ -1754,9 +1813,44 @@ function handleConfigClick(mx,my){
     if(mx>=x&&mx<=x+w&&my>=y&&my<=y+h){b.action();return;}
   }
   // Click outside panel closes it
-  const cw=canvas.width,ch=canvas.height,pw=480,ph=510;
+  const cw=canvas.width,ch=canvas.height,pw=480,ph=556;
   const px=(cw-pw)/2,py=(ch-ph)/2;
   if(mx<px||mx>px+pw||my<py||my>py+ph) UI.configOpen=false;
+}
+
+function renderDocking(){
+  if(!S.docking) return;
+  const d=S.docking;
+  const progress=d.timer/d.duration;
+  const now=Date.now()/1000;
+
+  // World-space: animated fuel cable ship→station
+  ctx.save();
+  ctx.translate(canvas.width/2,canvas.height/2);
+  ctx.scale(S.cam.zoom,S.cam.zoom);
+  ctx.translate(-S.cam.x,-S.cam.y);
+  const flow=(now*2.5)%1;
+  ctx.setLineDash([14,10]);ctx.lineDashOffset=-flow*24;
+  ctx.strokeStyle='rgba(68,255,170,0.72)';ctx.lineWidth=2;
+  ctx.beginPath();ctx.moveTo(d.x,d.y);ctx.lineTo(d.obj.x,d.obj.y);ctx.stroke();
+  ctx.setLineDash([]);
+  // Glow at station end
+  const gr=ctx.createRadialGradient(d.obj.x,d.obj.y,0,d.obj.x,d.obj.y,48);
+  gr.addColorStop(0,`rgba(68,255,170,${0.28*progress})`);
+  gr.addColorStop(1,'rgba(68,255,170,0)');
+  ctx.fillStyle=gr;ctx.beginPath();ctx.arc(d.obj.x,d.obj.y,48,0,Math.PI*2);ctx.fill();
+  ctx.restore();
+
+  // HUD overlay
+  const cw=canvas.width,ch=canvas.height;
+  ctx.fillStyle='rgba(68,255,170,0.92)';ctx.font='bold '+fnt(26);
+  ctx.textAlign='center';ctx.fillText('DOCKING',cw/2,ch/2-26);
+  // Progress bar
+  const bw=220,bh=8,bx=cw/2-bw/2,by=ch/2-10;
+  ctx.fillStyle='#071814';ctx.fillRect(bx,by,bw,bh);
+  ctx.fillStyle='#44ffaa';ctx.fillRect(bx,by,bw*progress,bh);
+  ctx.strokeStyle='#22aa77';ctx.lineWidth=1;ctx.strokeRect(bx,by,bw,bh);
+  ctx.textAlign='left';
 }
 
 // ================================================================
@@ -1777,6 +1871,7 @@ function render(){
   ctx.restore();
 
   renderVignette();
+  if(S.docking) renderDocking();
   if(S.cheat&&S.ship.alive&&S.phase==='playing') renderTraj();
   if(S.phase==='playing'||S.phase==='paused') renderHUD();
   if(S.phase==='paused') renderPause();
@@ -1855,7 +1950,7 @@ function loop(ts){
     S.time+=dt;
     updateCam(dt);updateBodies(dt);updateComets(dt);
     updatePhysics(dt);updateLasers(dt);
-    updateObjectives(dt);updateFuelPopups(dt);updateEdgeWarning(dt);updateAudio(dt);
+    updateObjectives(dt);updateDocking(dt);updateFuelPopups(dt);updateEdgeWarning(dt);updateAudio(dt);
   }
   render();
   requestAnimationFrame(loop);
