@@ -27,7 +27,12 @@ const FUEL_BOOST = 135;
 const DEAD_DRIFT = 30;
 const GRACE_TIME = 1.5;   // seconds of spawn invincibility
 
-const DRAW_SCALE = 2.5;   // visual radius multiplier (physics radius unchanged)
+const DRAW_SCALE  = 2.5;   // visual radius multiplier (physics radius unchanged)
+
+const ARM_LEN    = SHIP_R * 11; // mining arm length (world units, = ship sprite width)
+const DOCK_RADIUS = 55;         // unified station proximity trigger
+const DOCK_SPEED  = 50;         // max approach speed to complete dock
+const DOCK_ALIGN  = 0.82;       // min |cos θ| ship-heading vs ship→station (≈35° cone)
 
 const ZOOM_MIN   = 0.25;
 const ZOOM_MAX   = 2.0;
@@ -533,7 +538,7 @@ function genObjectives(planetIdxs,asteroidIdxs){
   const tier=Math.min(4,1+Math.floor(S.runCount/2));
 
   const sp=safePos();
-  S.objectives.push({type:'reach',x:sp.x,y:sp.y,radius:45,label:'Reach Station Alpha',complete:false,fuelReward:0,color:'#00ffcc'});
+  S.objectives.push({type:'reach',x:sp.x,y:sp.y,radius:DOCK_RADIUS,label:'Reach Station Alpha',complete:false,fuelReward:0,color:'#00ffcc'});
 
   if(tier>=2){
     if(nr()>0.5&&asteroidIdxs.length>0){
@@ -542,7 +547,7 @@ function genObjectives(planetIdxs,asteroidIdxs){
       S.objectives.push({type:'mine',targetIdx:ai,label:'Mine Asteroid B-7 (3s)',complete:false,fuelReward:Math.round(300*CONFIG.refuelMult),color:'#ffaa00',progress:0});
     } else {
       const cp=safePos();
-      S.objectives.push({type:'collect',x:cp.x,y:cp.y,radius:25,label:'Collect Resource Pod',complete:false,fuelReward:Math.round(200*CONFIG.refuelMult),color:'#ffff44'});
+      S.objectives.push({type:'collect',x:cp.x,y:cp.y,radius:DOCK_RADIUS,label:'Collect Resource Pod',complete:false,fuelReward:Math.round(200*CONFIG.refuelMult),color:'#ffff44'});
     }
   }
   if(tier>=3&&nr()>0.35){
@@ -557,7 +562,7 @@ function genObjectives(planetIdxs,asteroidIdxs){
   }
   if(tier>=4&&nr()>0.5){
     const fp=safePos();
-    S.objectives.push({type:'reach',x:fp.x,y:fp.y,radius:45,label:'Reach Station Beta',complete:false,fuelReward:0,color:'#ff8844'});
+    S.objectives.push({type:'reach',x:fp.x,y:fp.y,radius:DOCK_RADIUS,label:'Reach Station Beta',complete:false,fuelReward:0,color:'#ff8844'});
   }
 }
 
@@ -730,12 +735,18 @@ function updateObjectives(dt){
   for(const obj of S.objectives){
     if(obj.complete) continue;
     if(obj.type==='reach'||obj.type==='collect'){
-      if(dist(sh.x,sh.y,obj.x,obj.y)<obj.radius) completObj(obj);
+      const d=dist(sh.x,sh.y,obj.x,obj.y);
+      if(d<DOCK_RADIUS){
+        const nx=(obj.x-sh.x)/d, ny=(obj.y-sh.y)/d;
+        const hdx=Math.sin(sh.angle), hdy=-Math.cos(sh.angle);
+        const dot=hdx*nx+hdy*ny;
+        if(Math.abs(dot)>=DOCK_ALIGN && Math.hypot(sh.vx,sh.vy)<DOCK_SPEED) completObj(obj);
+      }
     } else if(obj.type==='mine'){
       if(obj.targetIdx<0||obj.targetIdx>=S.bodies.length){obj.complete=true;continue;}
       const tgt=S.bodies[obj.targetIdx];
       if(tgt.type!=='asteroid'){obj.complete=true;continue;}
-      if(dist(sh.x,sh.y,tgt.x,tgt.y)<tgt.radius*DRAW_SCALE+65){
+      if(dist(sh.x,sh.y,tgt.x,tgt.y)<tgt.radius*DRAW_SCALE+ARM_LEN){
         obj.progress=Math.min(1,obj.progress+dt/3);
         if(obj.progress>=1) completObj(obj);
       } else {
@@ -808,7 +819,7 @@ function appendObjectives(){
   const asteroidIdxs=S.bodies.map((b,i)=>b.type==='asteroid'&&!b.isMining?i:-1).filter(i=>i>=0);
 
   const sp=safePos();
-  S.objectives.push({type:'reach',x:sp.x,y:sp.y,radius:45,
+  S.objectives.push({type:'reach',x:sp.x,y:sp.y,radius:DOCK_RADIUS,
     label:`Reach Station ${S.wave}`,complete:false,fuelReward:Math.round(150*CONFIG.refuelMult),color:'#00ffcc'});
 
   if(tier>=2){
@@ -819,7 +830,7 @@ function appendObjectives(){
         complete:false,fuelReward:Math.round(300*CONFIG.refuelMult),color:'#ffaa00',progress:0});
     } else if(nr()>0.4){
       const cp=safePos();
-      S.objectives.push({type:'collect',x:cp.x,y:cp.y,radius:25,label:'Collect Resource Pod',
+      S.objectives.push({type:'collect',x:cp.x,y:cp.y,radius:DOCK_RADIUS,label:'Collect Resource Pod',
         complete:false,fuelReward:Math.round(200*CONFIG.refuelMult),color:'#ffff44'});
     }
   }
@@ -1005,39 +1016,107 @@ function renderObjMarkers(){
     if(obj.complete) continue;
     const pulse=0.55+0.45*Math.sin(t*2);
 
-    if(obj.type==='reach'){
+    if(obj.type==='reach'||obj.type==='collect'){
+      // Unified station — same size for both types
+      const sz=64;
       ctx.globalAlpha=pulse;
       if(spriteOk('station')){
-        const sz=64;
         ctx.drawImage(ASSETS.station,obj.x-sz/2,obj.y-sz/2,sz,sz);
       } else {
         ctx.strokeStyle=obj.color;ctx.lineWidth=3;
-        ctx.beginPath();ctx.arc(obj.x,obj.y,obj.radius,0,Math.PI*2);ctx.stroke();
+        ctx.beginPath();ctx.arc(obj.x,obj.y,sz/2,0,Math.PI*2);ctx.stroke();
         ctx.beginPath();
-        ctx.moveTo(obj.x-22,obj.y);ctx.lineTo(obj.x+22,obj.y);
-        ctx.moveTo(obj.x,obj.y-22);ctx.lineTo(obj.x,obj.y+22);
+        ctx.moveTo(obj.x-20,obj.y);ctx.lineTo(obj.x+20,obj.y);
+        ctx.moveTo(obj.x,obj.y-20);ctx.lineTo(obj.x,obj.y+20);
         ctx.stroke();
       }
       ctx.globalAlpha=1;
-    } else if(obj.type==='collect'){
-      ctx.globalAlpha=pulse;
-      if(spriteOk('station')){
-        const sz=40;
-        ctx.drawImage(ASSETS.station,obj.x-sz/2,obj.y-sz/2,sz,sz);
-      } else {
-        ctx.strokeStyle=obj.color;ctx.lineWidth=3;
-        ctx.strokeRect(obj.x-16,obj.y-16,32,32);
+
+      // Docking guide — visible when ship is within 4× dock radius
+      if(S.ship.alive){
+        const sh=S.ship;
+        const dd=dist(sh.x,sh.y,obj.x,obj.y);
+        if(dd<DOCK_RADIUS*4&&dd>0.1){
+          const nx=(obj.x-sh.x)/dd, ny=(obj.y-sh.y)/dd;
+          const hdx=Math.sin(sh.angle), hdy=-Math.cos(sh.angle);
+          const dot=hdx*nx+hdy*ny;
+          const aligned=Math.abs(dot)>=DOCK_ALIGN;
+          const slow=Math.hypot(sh.vx,sh.vy)<DOCK_SPEED;
+          const col=aligned&&slow?'#00ff88':aligned?'#ffee00':'#556677';
+
+          // Two approach arrows (front and rear entry points on station)
+          const arrowAng=Math.atan2(ny,nx); // direction ship→station
+          ctx.save();
+          ctx.globalAlpha=0.6+0.4*pulse;
+          for(const flip of [0,Math.PI]){
+            const ax=obj.x+Math.cos(arrowAng+flip)*(sz/2+18);
+            const ay=obj.y+Math.sin(arrowAng+flip)*(sz/2+18);
+            ctx.save();
+            ctx.translate(ax,ay);
+            ctx.rotate(arrowAng+flip+Math.PI); // point inward
+            ctx.fillStyle=col;ctx.strokeStyle=col;ctx.lineWidth=1.5;
+            ctx.beginPath();
+            ctx.moveTo(0,-9);ctx.lineTo(7,7);ctx.lineTo(0,2);ctx.lineTo(-7,7);
+            ctx.closePath();ctx.fill();
+            ctx.restore();
+          }
+          ctx.restore();
+
+          // Status badge when close
+          if(dd<DOCK_RADIUS*1.5){
+            ctx.font='bold '+fnt(17);ctx.textAlign='center';
+            if(aligned&&slow){
+              ctx.fillStyle='#00ff88';ctx.fillText('DOCKING',obj.x,obj.y-sz/2-10);
+            } else if(aligned){
+              const spd=Math.hypot(sh.vx,sh.vy).toFixed(0);
+              ctx.fillStyle='#ffee00';ctx.fillText(`SLOW DOWN  ${spd}`,obj.x,obj.y-sz/2-10);
+            } else {
+              ctx.fillStyle='#556677';ctx.fillText('ALIGN NOSE / TAIL',obj.x,obj.y-sz/2-10);
+            }
+            ctx.textAlign='left';
+          }
+        }
       }
-      ctx.globalAlpha=1;
+
     } else if(obj.type==='mine'){
       if(obj.targetIdx<0||obj.targetIdx>=S.bodies.length) continue;
       const tgt=S.bodies[obj.targetIdx];
+
+      // Mining progress arc
       if(obj.progress>0){
         ctx.strokeStyle=obj.color;ctx.lineWidth=4;
         ctx.beginPath();
         ctx.arc(tgt.x,tgt.y,tgt.radius*DRAW_SCALE+14,-Math.PI/2,-Math.PI/2+obj.progress*Math.PI*2);
         ctx.stroke();
       }
+
+      // Mining arm — deploy when ship is within reach
+      if(S.ship.alive){
+        const sh=S.ship;
+        const armDist=dist(sh.x,sh.y,tgt.x,tgt.y);
+        const deployRange=tgt.radius*DRAW_SCALE+ARM_LEN+40;
+        if(armDist<deployRange&&armDist>0.1){
+          const nx=(tgt.x-sh.x)/armDist, ny=(tgt.y-sh.y)/armDist;
+          const ax=sh.x+nx*ARM_LEN, ay=sh.y+ny*ARM_LEN;
+          const mining=armDist<tgt.radius*DRAW_SCALE+ARM_LEN;
+          const vibe=mining?(0.4+0.6*Math.sin(Date.now()/55)):0;
+
+          // Arm shaft
+          ctx.strokeStyle=mining?'#cc9933':'#778866';
+          ctx.lineWidth=2.5;
+          ctx.beginPath();ctx.moveTo(sh.x,sh.y);ctx.lineTo(ax,ay);ctx.stroke();
+
+          // Drill head
+          const dr=5+vibe*3;
+          ctx.fillStyle=mining?`rgba(255,${140+Math.floor(vibe*80)},0,0.92)`:'rgba(180,140,60,0.7)';
+          ctx.beginPath();ctx.arc(ax,ay,dr,0,Math.PI*2);ctx.fill();
+          if(mining){
+            ctx.strokeStyle=`rgba(255,200,0,${0.5+vibe*0.5})`;ctx.lineWidth=1.5;
+            ctx.beginPath();ctx.arc(ax,ay,dr+4,0,Math.PI*2);ctx.stroke();
+          }
+        }
+      }
+
     } else if(obj.type==='slingshot'){
       for(const pi of obj.targets){
         if(obj.completed.has(pi)||pi>=S.bodies.length) continue;
