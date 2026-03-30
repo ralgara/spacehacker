@@ -402,14 +402,14 @@ function genWorld() {
   // Nebula blobs — clustered near all four map edges
   const NEBULA_COLS=['#cc2200','#aa1133','#881144','#6611aa','#441166','#991122'];
   S.nebula=[];
-  const edge=1400; // how far inward blobs can reach
+  const nebulaEdge=1400; // how far inward blobs can reach
   for(let i=0;i<42;i++){
     let nx,ny;
     const side=i%4;
-    if(side===0){nx=rn(0,MAP);      ny=rn(0,edge);}
-    else if(side===1){nx=rn(0,MAP); ny=rn(MAP-edge,MAP);}
-    else if(side===2){nx=rn(0,edge);ny=rn(0,MAP);}
-    else             {nx=rn(MAP-edge,MAP);ny=rn(0,MAP);}
+    if(side===0){nx=rn(0,MAP);           ny=rn(0,nebulaEdge);}
+    else if(side===1){nx=rn(0,MAP);      ny=rn(MAP-nebulaEdge,MAP);}
+    else if(side===2){nx=rn(0,nebulaEdge);ny=rn(0,MAP);}
+    else             {nx=rn(MAP-nebulaEdge,MAP);ny=rn(0,MAP);}
     S.nebula.push({x:nx,y:ny,r:rn(420,1300),a:nr()*0.07+0.03,
                    col:NEBULA_COLS[ri(0,NEBULA_COLS.length)]});
   }
