@@ -384,7 +384,7 @@ function initState() {
     cam:{x:0,y:0,zoom:ZOOM_DEF},
     showMinimap:true, cheat:false,
     cometTimer:0, nextComet:rn(COMET_MIN,COMET_MAX),
-    bgStars:[], nebula:[], death:null,
+    bgStars:[], nebula:[], fuelPopups:[], death:null,
   };
 }
 
@@ -432,12 +432,14 @@ function genWorld() {
       mass:1000,radius:rn(26,46),color:pCols[i],glow:pCols[i],parentIdx:0,
     });
     for(let j=0;j<ri(1,4);j++){
-      const orR=S.bodies[pi].radius*DRAW_SCALE+rn(40,120),orA=ra(),orS=rn(0.4,1.0)*(nr()>0.5?1:-1);
+      const orR=S.bodies[pi].radius*DRAW_SCALE+rn(160,480),orA=ra();
+      const retrograde=nr()<0.08;  // ~8% chance of retrograde orbit
+      const orS=rn(0.08,0.22)*(retrograde?-1:1);
       S.bodies.push({
         type:'moon',
         x:S.bodies[pi].x+Math.cos(orA)*orR,
         y:S.bodies[pi].y+Math.sin(orA)*orR,
-        mass:100,radius:rn(9,17),
+        mass:25,radius:rn(2,5),
         color:MOON_COLORS[ri(0,MOON_COLORS.length)],glow:'#aaaaaa',
         parentIdx:pi,orbitR:orR,orbitAngle:orA,orbitSpeed:orS,
       });
@@ -748,8 +750,19 @@ function updateObjectives(dt){
 
 function completObj(obj){
   obj.complete=true; S.objectivesDone++;
-  if(obj.fuelReward>0) S.ship.fuel=Math.min(FUEL_MAX,S.ship.fuel+obj.fuelReward);
+  if(obj.fuelReward>0){
+    S.ship.fuel=Math.min(FUEL_MAX,S.ship.fuel+obj.fuelReward);
+    S.fuelPopups.push({amount:obj.fuelReward,alpha:1.0,dy:0});
+  }
   playChime();
+}
+
+function updateFuelPopups(dt){
+  for(let i=S.fuelPopups.length-1;i>=0;i--){
+    S.fuelPopups[i].alpha-=dt/2.2;
+    S.fuelPopups[i].dy+=dt*28;
+    if(S.fuelPopups[i].alpha<=0) S.fuelPopups.splice(i,1);
+  }
 }
 
 function appendObjectives(){
@@ -1115,6 +1128,29 @@ function renderShip(){
   ctx.restore();
 }
 
+function renderGravVector(){
+  if(!S.ship.alive) return;
+  const sh=S.ship;
+  const g=gravAt(sh.x,sh.y);
+  const mag=Math.hypot(g.ax,g.ay);
+  if(mag<0.5) return;
+  const len=clamp(mag*0.6,22,90);
+  const nx=g.ax/mag, ny=g.ay/mag;
+  const ex=sh.x+nx*len, ey=sh.y+ny*len;
+  const ang=Math.atan2(ny,nx);
+  const as=9/S.cam.zoom;
+  ctx.save();
+  ctx.strokeStyle='rgba(255,200,60,0.82)';ctx.fillStyle='rgba(255,200,60,0.82)';
+  ctx.lineWidth=2/S.cam.zoom;
+  ctx.beginPath();ctx.moveTo(sh.x,sh.y);ctx.lineTo(ex,ey);ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(ex,ey);
+  ctx.lineTo(ex-as*Math.cos(ang-0.42),ey-as*Math.sin(ang-0.42));
+  ctx.lineTo(ex-as*Math.cos(ang+0.42),ey-as*Math.sin(ang+0.42));
+  ctx.closePath();ctx.fill();
+  ctx.restore();
+}
+
 function renderLasers(){
   ctx.save();
   for(const l of S.lasers){
@@ -1193,7 +1229,16 @@ function renderHUD(){
   const fc=fp>0.5?'#22ffbb':fp>0.25?'#ffaa00':C_WARN;
   ctx.fillStyle=fc;ctx.fillRect(fx,fy,fw*fp,fh);
   ctx.strokeStyle='#1a3355';ctx.lineWidth=1;ctx.strokeRect(fx,fy,fw,fh);
-  ctx.fillStyle=C_LABEL;ctx.font=fnt(22);ctx.fillText('FUEL',fx+fw+10,fy+17);
+  ctx.fillStyle=C_LABEL;ctx.font=fnt(20);ctx.fillText('FUEL',fx+fw+10,fy+10);
+  ctx.fillStyle=fc;ctx.font=fnt(18);
+  ctx.fillText(`${Math.ceil(sh.fuel)} / ${FUEL_MAX}  ·  ${Math.floor(fp*100)}%`,fx+fw+10,fy+26);
+
+  // Fuel bonus popups
+  for(const p of S.fuelPopups){
+    ctx.fillStyle=`rgba(68,255,170,${p.alpha})`;
+    ctx.font='bold '+fnt(28);ctx.textAlign='left';
+    ctx.fillText(`+${p.amount} FUEL`,fx,fy-12-p.dy);
+  }
 
   // Low-fuel screen flash
   if(fp<0.15&&Math.floor(Date.now()/400)%2===0){
@@ -1527,6 +1572,7 @@ function render(){
   renderBodies();renderComets();
   renderObjMarkers();renderLasers();
   if(S.ship.alive) renderShip();
+  if(S.cheat&&S.ship.alive) renderGravVector();
   ctx.restore();
 
   renderVignette();
@@ -1608,7 +1654,7 @@ function loop(ts){
     S.time+=dt;
     updateCam(dt);updateBodies(dt);updateComets(dt);
     updatePhysics(dt);updateLasers(dt);
-    updateObjectives(dt);updateAudio(dt);
+    updateObjectives(dt);updateFuelPopups(dt);updateAudio(dt);
   }
   render();
   requestAnimationFrame(loop);
