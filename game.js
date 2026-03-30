@@ -47,6 +47,26 @@ const LASER_COOL = 0.3;
 const LASER_RANGE= 1400;
 
 // ================================================================
+// CONFIG  — runtime-adjustable settings
+// ================================================================
+const CONFIG = {
+  gravMult:   1.0,   // multiplier on G
+  cometRate:  1.0,   // multiplier on comet frequency (0 = off)
+  music:      true,
+  showFPS:    false,
+};
+
+// Comet rate presets: [label, cometRate multiplier]
+const COMET_PRESETS  = [['Off',0],['Light',0.5],['Normal',1.0],['Heavy',2.5]];
+const GRAV_PRESETS   = [['×½',0.5],['×1',1.0],['×1½',1.5],['×2',2.0],['×3',3.0]];
+
+// ================================================================
+// UI STATE
+// ================================================================
+const UI = { configOpen: false };
+let _configBtns = [];   // rebuilt each renderConfig frame
+
+// ================================================================
 // PALETTE  — everything in cool cyan/blue/purple tones
 // ================================================================
 const PLANET_COLORS = ['#4488ff','#ff6644','#ffaa33','#44cc88','#cc88ff','#ff4488','#33ddff'];
@@ -247,7 +267,7 @@ function _schedLead(freq, time, vol) {
 function _resetMusic() { _arpStep=0;_cStep=0;_cIdx=0;_nextArp=0;_nextLead=0; }
 
 function scheduleMusic() {
-  if (!AUD || S.phase !== 'playing') return;
+  if (!AUD || S.phase !== 'playing' || !CONFIG.music) return;
   const now = AUD.ctx.currentTime;
   if (_nextArp  < now) _nextArp  = now + 0.04;
   if (_nextLead < now) _nextLead = now + 0.12 + Math.random()*1.2;
@@ -364,7 +384,7 @@ function initState() {
     cam:{x:0,y:0,zoom:ZOOM_DEF},
     showMinimap:true, cheat:false,
     cometTimer:0, nextComet:rn(COMET_MIN,COMET_MAX),
-    bgStars:[], death:null,
+    bgStars:[], nebula:[], death:null,
   };
 }
 
@@ -378,6 +398,21 @@ function genWorld() {
   S.bgStars=[];
   for(let i=0;i<350;i++)
     S.bgStars.push({x:nr()*MAP,y:nr()*MAP,r:nr()*1.5+0.3,a:nr()*0.7+0.3});
+
+  // Nebula blobs — clustered near all four map edges
+  const NEBULA_COLS=['#cc2200','#aa1133','#881144','#6611aa','#441166','#991122'];
+  S.nebula=[];
+  const edge=1400; // how far inward blobs can reach
+  for(let i=0;i<42;i++){
+    let nx,ny;
+    const side=i%4;
+    if(side===0){nx=rn(0,MAP);      ny=rn(0,edge);}
+    else if(side===1){nx=rn(0,MAP); ny=rn(MAP-edge,MAP);}
+    else if(side===2){nx=rn(0,edge);ny=rn(0,MAP);}
+    else             {nx=rn(MAP-edge,MAP);ny=rn(0,MAP);}
+    S.nebula.push({x:nx,y:ny,r:rn(420,1300),a:nr()*0.07+0.03,
+                   col:NEBULA_COLS[ri(0,NEBULA_COLS.length)]});
+  }
 
   // Star
   const stx=MAP/2+rn(-300,300), sty=MAP/2+rn(-300,300);
@@ -506,10 +541,11 @@ function genObjectives(planetIdxs,asteroidIdxs){
 // ================================================================
 function gravAt(x,y){
   let ax=0,ay=0;
+  const Geff=G*CONFIG.gravMult;
   for(const b of S.bodies){
     const dx=b.x-x,dy=b.y-y,r2=dx*dx+dy*dy,r=Math.sqrt(r2);
     if(r<1) continue;
-    const a=G*b.mass/r2; ax+=a*dx/r; ay+=a*dy/r;
+    const a=Geff*b.mass/r2; ax+=a*dx/r; ay+=a*dy/r;
   }
   return{ax,ay};
 }
@@ -649,8 +685,10 @@ function spawnComet(){
 }
 
 function updateComets(dt){
+  if(CONFIG.cometRate<=0){S.comets=[];return;}
   S.cometTimer+=dt;
-  if(S.cometTimer>=S.nextComet){S.cometTimer=0;S.nextComet=rn(COMET_MIN,COMET_MAX);spawnComet();}
+  const interval=rn(COMET_MIN,COMET_MAX)/CONFIG.cometRate;
+  if(S.cometTimer>=S.nextComet){S.cometTimer=0;S.nextComet=interval;spawnComet();}
   for(let i=S.comets.length-1;i>=0;i--){
     const c=S.comets[i];
     c.trail.unshift({x:c.x,y:c.y}); if(c.trail.length>30) c.trail.pop();
@@ -757,13 +795,14 @@ function appendObjectives(){
 function computeTraj(){
   const pts=[]; let hit=false;
   let x=S.ship.x,y=S.ship.y,vx=S.ship.vx,vy=S.ship.vy;
+  const Geff=G*CONFIG.gravMult;
   for(let i=0;i<TRAJ_STEPS;i++){
     pts.push({x,y});
     let ax=0,ay=0;
     for(const b of S.bodies){
       const dx=b.x-x,dy=b.y-y,r2=dx*dx+dy*dy,r=Math.sqrt(r2);
       if(r<b.radius*DRAW_SCALE){hit=true;break;}
-      const a=G*b.mass/r2; ax+=a*dx/r; ay+=a*dy/r;
+      const a=Geff*b.mass/r2; ax+=a*dx/r; ay+=a*dy/r;
     }
     if(hit) break;
     vx+=ax*TRAJ_DT;vy+=ay*TRAJ_DT;x+=vx*TRAJ_DT;y+=vy*TRAJ_DT;
@@ -799,6 +838,19 @@ function renderBgStars(){
     ctx.beginPath();ctx.arc(s.x,s.y,s.r,0,Math.PI*2);ctx.fill();
   }
   ctx.globalAlpha=1;
+}
+
+function hex2rgb(h){return[parseInt(h.slice(1,3),16),parseInt(h.slice(3,5),16),parseInt(h.slice(5,7),16)];}
+
+function renderNebula(){
+  for(const n of S.nebula){
+    const [r,g,b]=hex2rgb(n.col);
+    const gr=ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,n.r);
+    gr.addColorStop(0,`rgba(${r},${g},${b},${n.a})`);
+    gr.addColorStop(1,`rgba(${r},${g},${b},0)`);
+    ctx.fillStyle=gr;
+    ctx.beginPath();ctx.arc(n.x,n.y,n.r,0,Math.PI*2);ctx.fill();
+  }
 }
 
 function renderBodies(){
@@ -1228,9 +1280,10 @@ function renderHUD(){
   ctx.textAlign='left';
   ctx.fillText(ver, 22, ch-14);
   ctx.textAlign='center';
-  ctx.fillText('WASD · SHIFT:boost · SPACE:laser · -/=:zoom · M:map · `:cheat · R:restart · ESC:pause', cw/2, ch-14);
+  ctx.fillText('WASD · SHIFT:boost · SPACE:laser · -/=:zoom · M:map · Tab:settings · `:cheat · R:restart · ESC:pause', cw/2, ch-14);
   ctx.textAlign='right';
   ctx.fillText(`×${S.cam.zoom.toFixed(2)}`, cw-16, ch-14);
+  if(CONFIG.showFPS){ctx.fillText(`${_fps} fps`,cw-16,ch-34);}
   ctx.textAlign='left';
 
   if(S.showMinimap) renderMinimap();
@@ -1372,6 +1425,95 @@ function renderPause(){
 }
 
 // ================================================================
+// VIEWPORT VIGNETTE
+// ================================================================
+function renderVignette(){
+  const cw=canvas.width,ch=canvas.height;
+  const cx=cw/2,cy=ch/2,rad=Math.max(cw,ch)*0.75;
+  const g=ctx.createRadialGradient(cx,cy,rad*0.35,cx,cy,rad);
+  g.addColorStop(0,'rgba(0,0,0,0)');
+  g.addColorStop(1,'rgba(55,0,0,0.55)');
+  ctx.fillStyle=g;ctx.fillRect(0,0,cw,ch);
+}
+
+// ================================================================
+// CONFIG PANEL
+// ================================================================
+function _cfgBtn(label,active,x,y,w,h,action){
+  ctx.fillStyle=active?'#1a3a5a':'#080e1c';
+  ctx.strokeStyle=active?'#22aaee':'#223344';
+  ctx.lineWidth=1.2;
+  ctx.fillRect(x,y,w,h);ctx.strokeRect(x,y,w,h);
+  ctx.fillStyle=active?'#88ddff':C_DIM;
+  ctx.font=fnt(20);ctx.textAlign='center';
+  ctx.fillText(label,x+w/2,y+h*0.67);
+  _configBtns.push({rect:[x,y,w,h],action});
+}
+
+function renderConfig(){
+  const cw=canvas.width,ch=canvas.height;
+  const pw=460,ph=340,px=(cw-pw)/2,py=(ch-ph)/2;
+  _configBtns=[];
+
+  ctx.fillStyle='rgba(4,8,20,0.94)';
+  ctx.fillRect(px,py,pw,ph);
+  ctx.strokeStyle='#334466';ctx.lineWidth=1.5;
+  ctx.strokeRect(px,py,pw,ph);
+
+  ctx.fillStyle=C_LABEL;ctx.font='bold '+fnt(28);
+  ctx.textAlign='center';ctx.fillText('SETTINGS',cw/2,py+40);
+  ctx.fillStyle=C_DIM;ctx.font=fnt(18);
+  ctx.fillText('Tab · close',cw/2,py+62);
+
+  const lx=px+18,bh=36,gap=10;
+  let row=py+86;
+
+  // Gravity
+  ctx.fillStyle=C_VALUE;ctx.font=fnt(22);ctx.textAlign='left';
+  ctx.fillText('GRAVITY',lx,row+bh*0.67);
+  const gw=62;
+  GRAV_PRESETS.forEach(([lbl,val],i)=>{
+    _cfgBtn(lbl,CONFIG.gravMult===val,lx+110+i*(gw+gap),row,gw,bh,()=>{CONFIG.gravMult=val;});
+  });
+
+  row+=bh+14;
+  // Comets
+  ctx.fillStyle=C_VALUE;ctx.font=fnt(22);ctx.textAlign='left';
+  ctx.fillText('COMETS',lx,row+bh*0.67);
+  const cw2=74;
+  COMET_PRESETS.forEach(([lbl,val],i)=>{
+    _cfgBtn(lbl,CONFIG.cometRate===val,lx+110+i*(cw2+gap),row,cw2,bh,()=>{CONFIG.cometRate=val;});
+  });
+
+  row+=bh+14;
+  // Music
+  ctx.fillStyle=C_VALUE;ctx.font=fnt(22);ctx.textAlign='left';
+  ctx.fillText('MUSIC',lx,row+bh*0.67);
+  _cfgBtn('On', CONFIG.music,   lx+110,         row,80,bh,()=>{CONFIG.music=true;});
+  _cfgBtn('Off',!CONFIG.music,  lx+110+80+gap,  row,80,bh,()=>{CONFIG.music=false;});
+
+  row+=bh+14;
+  // FPS
+  ctx.fillStyle=C_VALUE;ctx.font=fnt(22);ctx.textAlign='left';
+  ctx.fillText('FPS',lx,row+bh*0.67);
+  _cfgBtn('On', CONFIG.showFPS, lx+110,         row,80,bh,()=>{CONFIG.showFPS=true;});
+  _cfgBtn('Off',!CONFIG.showFPS,lx+110+80+gap,  row,80,bh,()=>{CONFIG.showFPS=false;});
+
+  ctx.textAlign='left';
+}
+
+function handleConfigClick(mx,my){
+  for(const b of _configBtns){
+    const[x,y,w,h]=b.rect;
+    if(mx>=x&&mx<=x+w&&my>=y&&my<=y+h){b.action();return;}
+  }
+  // Click outside panel closes it
+  const cw=canvas.width,ch=canvas.height,pw=460,ph=340;
+  const px=(cw-pw)/2,py=(ch-ph)/2;
+  if(mx<px||mx>px+pw||my<py||my>py+ph) UI.configOpen=false;
+}
+
+// ================================================================
 // MASTER RENDER
 // ================================================================
 function render(){
@@ -1380,28 +1522,40 @@ function render(){
 
   ctx.save();applyCamera();
   renderBgStars();
+  renderNebula();
   if(S.cheat) renderSOI();
   renderBodies();renderComets();
   renderObjMarkers();renderLasers();
   if(S.ship.alive) renderShip();
   ctx.restore();
 
+  renderVignette();
   if(S.cheat&&S.ship.alive&&S.phase==='playing') renderTraj();
   if(S.phase==='playing'||S.phase==='paused') renderHUD();
   if(S.phase==='paused') renderPause();
   if(S.phase==='dead')  {renderHUD();renderDead();}
+  if(UI.configOpen) renderConfig();
 }
 
 // ================================================================
 // INPUT
 // ================================================================
 const keys={};
+canvas.addEventListener('mousedown',e=>{
+  if(UI.configOpen) handleConfigClick(e.clientX,e.clientY);
+});
+
 window.addEventListener('keydown',e=>{
   if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
   keys[e.code]=true;
 
   switch(e.code){
+    case 'Tab':
+      e.preventDefault();
+      UI.configOpen=!UI.configOpen;
+      break;
     case 'Escape':
+      if(UI.configOpen){UI.configOpen=false;break;}
       if(S.phase==='playing')     S.phase='paused';
       else if(S.phase==='paused') S.phase='playing';
       else if(S.phase==='dead') S.phase='menu';
@@ -1435,6 +1589,7 @@ window.addEventListener('keyup',e=>{keys[e.code]=false;});
 // GAME LOOP
 // ================================================================
 let lastTs=0;
+let _fps=60, _fpsFrames=0, _fpsTimer=0;
 
 function startRun(){
   initAudio();
@@ -1447,6 +1602,8 @@ function startRun(){
 function loop(ts){
   const dt=Math.min((ts-lastTs)/1000,0.05);
   lastTs=ts;
+  _fpsFrames++; _fpsTimer+=dt;
+  if(_fpsTimer>=0.5){_fps=Math.round(_fpsFrames/_fpsTimer);_fpsFrames=0;_fpsTimer=0;}
   if(S.phase==='playing'){
     S.time+=dt;
     updateCam(dt);updateBodies(dt);updateComets(dt);
