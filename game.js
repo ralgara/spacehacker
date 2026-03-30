@@ -12,7 +12,8 @@ window.addEventListener('resize', resize);
 // ================================================================
 // CONSTANTS
 // ================================================================
-const MAP        = 8000;
+const MAP        = 40000;
+const EDGE_WARN  = 3000;  // world units from map edge that triggers warning
 const G          = 1950;           // ~4× baseline — gravity is dominant
 const SOI_ACCEL  = 15;             // threshold accel (units/s²) for SOI display (~10% of max thrust)
 
@@ -385,6 +386,19 @@ function playDeathSfx() {
   osc.start(); osc.stop(c.currentTime+2.1);
 }
 
+function playEdgeAlarm(){
+  if(!AUD) return;
+  const c=AUD.ctx, t=c.currentTime;
+  const osc=c.createOscillator(), g=c.createGain();
+  osc.type='square';
+  osc.frequency.setValueAtTime(660,t);
+  osc.frequency.exponentialRampToValueAtTime(330,t+0.25);
+  osc.connect(g); g.connect(AUD.master);
+  g.gain.setValueAtTime(0.08,t);
+  g.gain.exponentialRampToValueAtTime(0.001,t+0.3);
+  osc.start(t); osc.stop(t+0.3);
+}
+
 // ================================================================
 // GAME STATE
 // ================================================================
@@ -399,7 +413,8 @@ function initState() {
     cam:{x:0,y:0,zoom:ZOOM_DEF},
     showMinimap:true, cheat:false,
     cometTimer:0, nextComet:rn(COMET_MIN,COMET_MAX),
-    bgStars:[], nebula:[], fuelPopups:[], death:null,
+    bgStars:[], fuelPopups:[], death:null,
+    nearEdge:false, edgeAlarmTimer:0,
   };
 }
 
@@ -411,23 +426,10 @@ function genWorld() {
   S.bodies=[]; S.comets=[]; S.objectives=[]; S.lasers=[];
 
   S.bgStars=[];
-  for(let i=0;i<350;i++)
+  for(let i=0;i<2500;i++)
     S.bgStars.push({x:nr()*MAP,y:nr()*MAP,r:nr()*1.5+0.3,a:nr()*0.7+0.3});
 
-  // Nebula blobs — centered on all four map edges, extending inward
-  const NEBULA_COLS=['#cc2200','#aa1133','#881144','#6611aa','#441166','#991122'];
-  S.nebula=[];
-  for(let i=0;i<60;i++){
-    let nx,ny;
-    const side=i%4;
-    const spread=400; // how far centers stray from the exact edge line
-    if(side===0){nx=rn(0,MAP); ny=rn(-spread,spread);}
-    else if(side===1){nx=rn(0,MAP); ny=rn(MAP-spread,MAP+spread);}
-    else if(side===2){nx=rn(-spread,spread); ny=rn(0,MAP);}
-    else             {nx=rn(MAP-spread,MAP+spread); ny=rn(0,MAP);}
-    S.nebula.push({x:nx,y:ny,r:rn(500,1400),a:nr()*0.15+0.10,
-                   col:NEBULA_COLS[ri(0,NEBULA_COLS.length)]});
-  }
+  S.nearEdge=false; S.edgeAlarmTimer=0;
 
   // Star
   const stx=MAP/2+rn(-300,300), sty=MAP/2+rn(-300,300);
@@ -780,6 +782,18 @@ function updateFuelPopups(dt){
   }
 }
 
+function updateEdgeWarning(dt){
+  if(!S.ship.alive){S.nearEdge=false;return;}
+  const sh=S.ship;
+  S.nearEdge=sh.x<EDGE_WARN||sh.x>MAP-EDGE_WARN||sh.y<EDGE_WARN||sh.y>MAP-EDGE_WARN;
+  if(S.nearEdge){
+    S.edgeAlarmTimer-=dt;
+    if(S.edgeAlarmTimer<=0){playEdgeAlarm();S.edgeAlarmTimer=2.5;}
+  } else {
+    S.edgeAlarmTimer=0;
+  }
+}
+
 function appendObjectives(){
   S.objectives=S.objectives.filter(o=>!o.complete);
   S.wave++;
@@ -871,14 +885,35 @@ function renderBgStars(){
 function hex2rgb(h){return[parseInt(h.slice(1,3),16),parseInt(h.slice(3,5),16),parseInt(h.slice(5,7),16)];}
 
 function renderNebula(){
-  for(const n of S.nebula){
-    const [r,g,b]=hex2rgb(n.col);
-    const gr=ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,n.r);
-    gr.addColorStop(0,`rgba(${r},${g},${b},${n.a})`);
-    gr.addColorStop(1,`rgba(${r},${g},${b},0)`);
-    ctx.fillStyle=gr;
-    ctx.beginPath();ctx.arc(n.x,n.y,n.r,0,Math.PI*2);ctx.fill();
-  }
+  const BAND=2400;  // gradient fades inward this many world units from each edge
+  const OUTER=2000; // solid fill outside map bounds (visible when zoomed out)
+
+  // Solid fill outside the map square
+  ctx.fillStyle='#ff0000';
+  ctx.fillRect(-OUTER,-OUTER,MAP+2*OUTER,OUTER);        // top
+  ctx.fillRect(-OUTER,MAP,MAP+2*OUTER,OUTER);           // bottom
+  ctx.fillRect(-OUTER,0,OUTER,MAP);                     // left
+  ctx.fillRect(MAP,0,OUTER,MAP);                        // right
+
+  // Top gradient band: red at y=0, transparent at y=BAND
+  let gr=ctx.createLinearGradient(0,0,0,BAND);
+  gr.addColorStop(0,'rgba(255,0,0,0.88)'); gr.addColorStop(1,'rgba(255,0,0,0)');
+  ctx.fillStyle=gr; ctx.fillRect(0,0,MAP,BAND);
+
+  // Bottom gradient band: red at y=MAP, transparent at y=MAP-BAND
+  gr=ctx.createLinearGradient(0,MAP,0,MAP-BAND);
+  gr.addColorStop(0,'rgba(255,0,0,0.88)'); gr.addColorStop(1,'rgba(255,0,0,0)');
+  ctx.fillStyle=gr; ctx.fillRect(0,MAP-BAND,MAP,BAND);
+
+  // Left gradient band: red at x=0, transparent at x=BAND
+  gr=ctx.createLinearGradient(0,0,BAND,0);
+  gr.addColorStop(0,'rgba(255,0,0,0.88)'); gr.addColorStop(1,'rgba(255,0,0,0)');
+  ctx.fillStyle=gr; ctx.fillRect(0,0,BAND,MAP);
+
+  // Right gradient band: red at x=MAP, transparent at x=MAP-BAND
+  gr=ctx.createLinearGradient(MAP,0,MAP-BAND,0);
+  gr.addColorStop(0,'rgba(255,0,0,0.88)'); gr.addColorStop(1,'rgba(255,0,0,0)');
+  ctx.fillStyle=gr; ctx.fillRect(MAP-BAND,0,BAND,MAP);
 }
 
 function renderBodies(){
@@ -1312,6 +1347,15 @@ function renderHUD(){
     ctx.textAlign='center';ctx.fillText('SPAWN SHIELD',cw/2,46);ctx.textAlign='left';
   }
 
+  // Edge of space warning
+  if(S.nearEdge){
+    const blink=Math.floor(now_ms/400)%2===0;
+    ctx.fillStyle=`rgba(255,0,0,${blink?1:0.45})`;
+    ctx.font='bold '+fnt(28);ctx.textAlign='center';
+    ctx.fillText('WARNING: EDGE OF SPACE',cw/2,74);
+    ctx.textAlign='left';
+  }
+
   // ---- Objectives ----
   ctx.font=fnt(30);
   const oy=statY+36;
@@ -1693,7 +1737,7 @@ function loop(ts){
     S.time+=dt;
     updateCam(dt);updateBodies(dt);updateComets(dt);
     updatePhysics(dt);updateLasers(dt);
-    updateObjectives(dt);updateFuelPopups(dt);updateAudio(dt);
+    updateObjectives(dt);updateFuelPopups(dt);updateEdgeWarning(dt);updateAudio(dt);
   }
   render();
   requestAnimationFrame(loop);
