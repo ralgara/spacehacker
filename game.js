@@ -67,6 +67,21 @@ const UI = { configOpen: false };
 let _configBtns = [];   // rebuilt each renderConfig frame
 
 // ================================================================
+// ASSETS
+// ================================================================
+const ASSETS = {};
+function loadAssets(manifest, cb){
+  let n=manifest.length; if(!n){cb();return;}
+  for(const[key,src]of manifest){
+    const img=new Image();
+    img.onload =()=>{if(--n===0)cb();};
+    img.onerror=()=>{console.warn('Asset missing:',src);if(--n===0)cb();};
+    img.src=src; ASSETS[key]=img;
+  }
+}
+function spriteOk(key){ return ASSETS[key]&&ASSETS[key].naturalWidth>0; }
+
+// ================================================================
 // PALETTE  — everything in cool cyan/blue/purple tones
 // ================================================================
 const PLANET_COLORS = ['#4488ff','#ff6644','#ffaa33','#44cc88','#cc88ff','#ff4488','#33ddff'];
@@ -945,15 +960,29 @@ function renderObjMarkers(){
     const pulse=0.55+0.45*Math.sin(t*2);
 
     if(obj.type==='reach'){
-      ctx.strokeStyle=obj.color;ctx.lineWidth=3;ctx.globalAlpha=pulse;
-      ctx.beginPath();ctx.arc(obj.x,obj.y,obj.radius,0,Math.PI*2);ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(obj.x-22,obj.y);ctx.lineTo(obj.x+22,obj.y);
-      ctx.moveTo(obj.x,obj.y-22);ctx.lineTo(obj.x,obj.y+22);
-      ctx.stroke();ctx.globalAlpha=1;
+      ctx.globalAlpha=pulse;
+      if(spriteOk('station')){
+        const sz=64;
+        ctx.drawImage(ASSETS.station,obj.x-sz/2,obj.y-sz/2,sz,sz);
+      } else {
+        ctx.strokeStyle=obj.color;ctx.lineWidth=3;
+        ctx.beginPath();ctx.arc(obj.x,obj.y,obj.radius,0,Math.PI*2);ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(obj.x-22,obj.y);ctx.lineTo(obj.x+22,obj.y);
+        ctx.moveTo(obj.x,obj.y-22);ctx.lineTo(obj.x,obj.y+22);
+        ctx.stroke();
+      }
+      ctx.globalAlpha=1;
     } else if(obj.type==='collect'){
-      ctx.strokeStyle=obj.color;ctx.lineWidth=3;ctx.globalAlpha=pulse;
-      ctx.strokeRect(obj.x-16,obj.y-16,32,32);ctx.globalAlpha=1;
+      ctx.globalAlpha=pulse;
+      if(spriteOk('station')){
+        const sz=40;
+        ctx.drawImage(ASSETS.station,obj.x-sz/2,obj.y-sz/2,sz,sz);
+      } else {
+        ctx.strokeStyle=obj.color;ctx.lineWidth=3;
+        ctx.strokeRect(obj.x-16,obj.y-16,32,32);
+      }
+      ctx.globalAlpha=1;
     } else if(obj.type==='mine'){
       if(obj.targetIdx<0||obj.targetIdx>=S.bodies.length) continue;
       const tgt=S.bodies[obj.targetIdx];
@@ -1034,88 +1063,67 @@ function renderShip(){
     }
   }
 
-  // ---- Solar panel booms ----
-  // Struts
-  ctx.fillStyle='#445566';
-  ctx.fillRect( u*0.30,-u*0.50, u*1.45, u*0.10);   // right strut
-  ctx.fillRect(-u*1.75,-u*0.50, u*1.45, u*0.10);   // left strut
-  // Panel cells
-  ctx.fillStyle='#0d2040';ctx.strokeStyle='#1a4070';ctx.lineWidth=0.8;
-  ctx.fillRect( u*1.75,-u*0.68, u*0.75, u*0.56);ctx.strokeRect( u*1.75,-u*0.68,u*0.75,u*0.56);
-  ctx.fillRect(-u*2.50,-u*0.68, u*0.75, u*0.56);ctx.strokeRect(-u*2.50,-u*0.68,u*0.75,u*0.56);
-  // Cell dividers
-  ctx.strokeStyle='#1a3a60';ctx.lineWidth=0.5;
-  for(const dx of [u*2.00,u*2.25]){
-    ctx.beginPath();ctx.moveTo( dx,-u*0.68);ctx.lineTo( dx,-u*0.12);ctx.stroke();
-    ctx.beginPath();ctx.moveTo(-dx,-u*0.68);ctx.lineTo(-dx,-u*0.12);ctx.stroke();
-  }
-  // Panel highlight sheen
-  ctx.fillStyle='rgba(60,120,200,0.15)';
-  ctx.fillRect( u*1.75,-u*0.68, u*0.75, u*0.18);
-  ctx.fillRect(-u*2.50,-u*0.68, u*0.75, u*0.18);
-
-  // ---- Tail stabilizer fins (small, paired) ----
-  ctx.fillStyle='#556677';ctx.strokeStyle='#334455';ctx.lineWidth=0.8;
-  for(const s of [-1,1]){
+  // ---- Ship body ----
+  if(spriteOk('ship')){
+    const sz=SHIP_R*11;
+    ctx.drawImage(ASSETS.ship,-sz/2,-sz/2,sz,sz);
+  } else {
+    // Canvas fallback: draw probe body
+    ctx.fillStyle='#445566';
+    ctx.fillRect( u*0.30,-u*0.50, u*1.45, u*0.10);
+    ctx.fillRect(-u*1.75,-u*0.50, u*1.45, u*0.10);
+    ctx.fillStyle='#0d2040';ctx.strokeStyle='#1a4070';ctx.lineWidth=0.8;
+    ctx.fillRect( u*1.75,-u*0.68, u*0.75, u*0.56);ctx.strokeRect( u*1.75,-u*0.68,u*0.75,u*0.56);
+    ctx.fillRect(-u*2.50,-u*0.68, u*0.75, u*0.56);ctx.strokeRect(-u*2.50,-u*0.68,u*0.75,u*0.56);
+    ctx.strokeStyle='#1a3a60';ctx.lineWidth=0.5;
+    for(const dx of [u*2.00,u*2.25]){
+      ctx.beginPath();ctx.moveTo( dx,-u*0.68);ctx.lineTo( dx,-u*0.12);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(-dx,-u*0.68);ctx.lineTo(-dx,-u*0.12);ctx.stroke();
+    }
+    ctx.fillStyle='rgba(60,120,200,0.15)';
+    ctx.fillRect( u*1.75,-u*0.68, u*0.75, u*0.18);
+    ctx.fillRect(-u*2.50,-u*0.68, u*0.75, u*0.18);
+    ctx.fillStyle='#556677';ctx.strokeStyle='#334455';ctx.lineWidth=0.8;
+    for(const s of [-1,1]){
+      ctx.beginPath();
+      ctx.moveTo(s*u*0.28,u*0.80);ctx.lineTo(s*u*0.65,u*1.10);ctx.lineTo(s*u*0.26,u*1.30);
+      ctx.closePath();ctx.fill();ctx.stroke();
+    }
+    const hullGrad=ctx.createLinearGradient(-u*0.32,-u*2.5,u*0.32,u*1.2);
+    hullGrad.addColorStop(0,'#dde8ff');hullGrad.addColorStop(0.45,'#c0d0e8');hullGrad.addColorStop(1,'#778899');
+    ctx.fillStyle=hullGrad;ctx.strokeStyle='#445566';ctx.lineWidth=1.2;
     ctx.beginPath();
-    ctx.moveTo(s*u*0.28, u*0.80);
-    ctx.lineTo(s*u*0.65, u*1.10);
-    ctx.lineTo(s*u*0.26, u*1.30);
+    ctx.moveTo(0,-u*2.7);ctx.lineTo(u*0.22,-u*2.0);ctx.lineTo(u*0.30,-u*0.8);
+    ctx.lineTo(u*0.28,u*0.6);ctx.lineTo(u*0.20,u*1.30);ctx.lineTo(-u*0.20,u*1.30);
+    ctx.lineTo(-u*0.28,u*0.6);ctx.lineTo(-u*0.30,-u*0.8);ctx.lineTo(-u*0.22,-u*2.0);
     ctx.closePath();ctx.fill();ctx.stroke();
-  }
-
-  // ---- Main fuselage (narrow elongated probe body) ----
-  const hullGrad=ctx.createLinearGradient(-u*0.32,-u*2.5,u*0.32,u*1.2);
-  hullGrad.addColorStop(0,'#dde8ff');
-  hullGrad.addColorStop(0.45,'#c0d0e8');
-  hullGrad.addColorStop(1,'#778899');
-  ctx.fillStyle=hullGrad;ctx.strokeStyle='#445566';ctx.lineWidth=1.2;
-  ctx.beginPath();
-  ctx.moveTo(0,        -u*2.7);  // nose tip
-  ctx.lineTo( u*0.22,  -u*2.0);  // upper shoulder
-  ctx.lineTo( u*0.30,  -u*0.8);  // mid right
-  ctx.lineTo( u*0.28,   u*0.6);  // waist right
-  ctx.lineTo( u*0.20,   u*1.30); // tail right
-  ctx.lineTo(-u*0.20,   u*1.30); // tail left
-  ctx.lineTo(-u*0.28,   u*0.6);  // waist left
-  ctx.lineTo(-u*0.30,  -u*0.8);  // mid left
-  ctx.lineTo(-u*0.22,  -u*2.0);  // upper shoulder
-  ctx.closePath();ctx.fill();ctx.stroke();
-
-  // Engine nozzle bell
-  ctx.fillStyle='#556688';ctx.strokeStyle='#334455';ctx.lineWidth=1;
-  ctx.beginPath();
-  ctx.moveTo(-u*0.18,u*1.25);ctx.lineTo(u*0.18,u*1.25);
-  ctx.lineTo(u*0.22,u*1.36);ctx.lineTo(-u*0.22,u*1.36);
-  ctx.closePath();ctx.fill();ctx.stroke();
-  const thrGlow=sh.thrusting&&sh.fuel>0;
-  ctx.strokeStyle=thrGlow?'rgba(100,160,255,0.85)':'rgba(60,80,120,0.55)';
-  ctx.lineWidth=thrGlow?2:1;
-  ctx.beginPath();ctx.arc(0,u*1.33,u*0.18,0,Math.PI*2);ctx.stroke();
-
-  // Hull panel lines
-  ctx.strokeStyle='rgba(60,80,120,0.45)';ctx.lineWidth=0.7;
-  ctx.beginPath();ctx.moveTo(0,-u*2.2);ctx.lineTo(0,u*1.0);ctx.stroke();
-  ctx.beginPath();ctx.moveTo(-u*0.27,-u*0.5);ctx.lineTo(u*0.27,-u*0.5);ctx.stroke();
-  ctx.beginPath();ctx.moveTo(-u*0.28, u*0.3);ctx.lineTo(u*0.28, u*0.3);ctx.stroke();
-
-  // ---- Sensor dome (nose) ----
-  const sGrad=ctx.createRadialGradient(-u*0.05,-u*2.62,0,0,-u*2.55,u*0.22);
-  sGrad.addColorStop(0,'#aaccff');sGrad.addColorStop(0.5,'#2255bb');sGrad.addColorStop(1,'#0a1a44');
-  ctx.fillStyle=sGrad;ctx.strokeStyle='#334488';ctx.lineWidth=1;
-  ctx.beginPath();ctx.arc(0,-u*2.55,u*0.22,0,Math.PI*2);ctx.fill();ctx.stroke();
-  ctx.fillStyle='rgba(200,230,255,0.40)';
-  ctx.beginPath();ctx.arc(-u*0.07,-u*2.64,u*0.08,0,Math.PI*2);ctx.fill();
-
-  // ---- Nav lights (at solar panel tips) ----
-  ctx.fillStyle='#ff3333';
-  ctx.beginPath();ctx.arc(-u*2.50,-u*0.40,u*0.15,0,Math.PI*2);ctx.fill();
-  ctx.fillStyle='#33ff88';
-  ctx.beginPath();ctx.arc( u*2.50,-u*0.40,u*0.15,0,Math.PI*2);ctx.fill();
-  // Tail strobe
-  if(Math.floor(now*2)%2===0){
-    ctx.fillStyle='rgba(255,255,255,0.9)';
-    ctx.beginPath();ctx.arc(0,u*1.26,u*0.10,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#556688';ctx.strokeStyle='#334455';ctx.lineWidth=1;
+    ctx.beginPath();
+    ctx.moveTo(-u*0.18,u*1.25);ctx.lineTo(u*0.18,u*1.25);
+    ctx.lineTo(u*0.22,u*1.36);ctx.lineTo(-u*0.22,u*1.36);
+    ctx.closePath();ctx.fill();ctx.stroke();
+    const thrGlow=sh.thrusting&&sh.fuel>0;
+    ctx.strokeStyle=thrGlow?'rgba(100,160,255,0.85)':'rgba(60,80,120,0.55)';
+    ctx.lineWidth=thrGlow?2:1;
+    ctx.beginPath();ctx.arc(0,u*1.33,u*0.18,0,Math.PI*2);ctx.stroke();
+    ctx.strokeStyle='rgba(60,80,120,0.45)';ctx.lineWidth=0.7;
+    ctx.beginPath();ctx.moveTo(0,-u*2.2);ctx.lineTo(0,u*1.0);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(-u*0.27,-u*0.5);ctx.lineTo(u*0.27,-u*0.5);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(-u*0.28,u*0.3);ctx.lineTo(u*0.28,u*0.3);ctx.stroke();
+    const sGrad=ctx.createRadialGradient(-u*0.05,-u*2.62,0,0,-u*2.55,u*0.22);
+    sGrad.addColorStop(0,'#aaccff');sGrad.addColorStop(0.5,'#2255bb');sGrad.addColorStop(1,'#0a1a44');
+    ctx.fillStyle=sGrad;ctx.strokeStyle='#334488';ctx.lineWidth=1;
+    ctx.beginPath();ctx.arc(0,-u*2.55,u*0.22,0,Math.PI*2);ctx.fill();ctx.stroke();
+    ctx.fillStyle='rgba(200,230,255,0.40)';
+    ctx.beginPath();ctx.arc(-u*0.07,-u*2.64,u*0.08,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#ff3333';
+    ctx.beginPath();ctx.arc(-u*2.50,-u*0.40,u*0.15,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#33ff88';
+    ctx.beginPath();ctx.arc(u*2.50,-u*0.40,u*0.15,0,Math.PI*2);ctx.fill();
+    if(Math.floor(now*2)%2===0){
+      ctx.fillStyle='rgba(255,255,255,0.9)';
+      ctx.beginPath();ctx.arc(0,u*1.26,u*0.10,0,Math.PI*2);ctx.fill();
+    }
   }
 
   // ---- Laser cooldown ring ----
@@ -1697,4 +1705,4 @@ function init(){
   requestAnimationFrame(ts=>{lastTs=ts;loop(ts);});
 }
 
-init();
+loadAssets([['ship','assets/ship.webp'],['station','assets/station.webp']], init);
