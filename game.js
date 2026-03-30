@@ -13,7 +13,7 @@ window.addEventListener('resize', resize);
 // CONSTANTS
 // ================================================================
 let   MAP        = 12000;  // set from CONFIG.mapSize at genWorld()
-const EDGE_WARN  = 3000;  // world units from map edge that triggers warning
+const EDGE_WARN_FRAC = 0.10; // fraction of MAP width that triggers edge warning
 const G          = 1950;           // ~4× baseline — gravity is dominant
 const SOI_ACCEL  = 15;             // threshold accel (units/s²) for SOI display (~10% of max thrust)
 
@@ -802,7 +802,8 @@ function updateFuelPopups(dt){
 function updateEdgeWarning(dt){
   if(!S.ship.alive){S.nearEdge=false;return;}
   const sh=S.ship;
-  S.nearEdge=sh.x<EDGE_WARN||sh.x>MAP-EDGE_WARN||sh.y<EDGE_WARN||sh.y>MAP-EDGE_WARN;
+  const warn=MAP*EDGE_WARN_FRAC;
+  S.nearEdge=sh.x<warn||sh.x>MAP-warn||sh.y<warn||sh.y>MAP-warn;
   if(S.nearEdge){
     S.edgeAlarmTimer-=dt;
     if(S.edgeAlarmTimer<=0){playEdgeAlarm();S.edgeAlarmTimer=2.5;}
@@ -902,7 +903,7 @@ function renderBgStars(){
 function hex2rgb(h){return[parseInt(h.slice(1,3),16),parseInt(h.slice(3,5),16),parseInt(h.slice(5,7),16)];}
 
 function renderNebula(){
-  const BAND=2400;  // gradient fades inward this many world units from each edge
+  const BAND=1200;  // gradient fades inward this many world units from each edge
   const OUTER=2000; // solid fill outside map bounds (visible when zoomed out)
 
   // Solid fill outside the map square
@@ -967,8 +968,7 @@ function renderBodies(){
 
     } else if(b.type==='asteroid'){
       if(b.isMining){
-        const pulse=0.5+0.5*Math.sin(Date.now()/1000*3);
-        ctx.strokeStyle=`rgba(255,170,0,${pulse})`;ctx.lineWidth=3;
+        ctx.strokeStyle='rgba(255,170,0,0.75)';ctx.lineWidth=3;
         ctx.beginPath();ctx.arc(x,y,r+10,0,Math.PI*2);ctx.stroke();
       }
       // Subtle halo so small asteroids stay visible
@@ -1019,7 +1019,6 @@ function renderObjMarkers(){
     if(obj.type==='reach'||obj.type==='collect'){
       // Unified station — same size for both types
       const sz=64;
-      ctx.globalAlpha=pulse;
       if(spriteOk('station')){
         ctx.drawImage(ASSETS.station,obj.x-sz/2,obj.y-sz/2,sz,sz);
       } else {
@@ -1047,7 +1046,7 @@ function renderObjMarkers(){
           // Two approach arrows (front and rear entry points on station)
           const arrowAng=Math.atan2(ny,nx); // direction ship→station
           ctx.save();
-          ctx.globalAlpha=0.6+0.4*pulse;
+          ctx.globalAlpha=0.88;
           for(const flip of [0,Math.PI]){
             const ax=obj.x+Math.cos(arrowAng+flip)*(sz/2+18);
             const ay=obj.y+Math.sin(arrowAng+flip)*(sz/2+18);
