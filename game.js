@@ -414,18 +414,18 @@ function genWorld() {
   for(let i=0;i<350;i++)
     S.bgStars.push({x:nr()*MAP,y:nr()*MAP,r:nr()*1.5+0.3,a:nr()*0.7+0.3});
 
-  // Nebula blobs — clustered near all four map edges
+  // Nebula blobs — centered on all four map edges, extending inward
   const NEBULA_COLS=['#cc2200','#aa1133','#881144','#6611aa','#441166','#991122'];
   S.nebula=[];
-  const nebulaEdge=1400; // how far inward blobs can reach
-  for(let i=0;i<42;i++){
+  for(let i=0;i<60;i++){
     let nx,ny;
     const side=i%4;
-    if(side===0){nx=rn(0,MAP);           ny=rn(0,nebulaEdge);}
-    else if(side===1){nx=rn(0,MAP);      ny=rn(MAP-nebulaEdge,MAP);}
-    else if(side===2){nx=rn(0,nebulaEdge);ny=rn(0,MAP);}
-    else             {nx=rn(MAP-nebulaEdge,MAP);ny=rn(0,MAP);}
-    S.nebula.push({x:nx,y:ny,r:rn(420,1300),a:nr()*0.07+0.03,
+    const spread=400; // how far centers stray from the exact edge line
+    if(side===0){nx=rn(0,MAP); ny=rn(-spread,spread);}
+    else if(side===1){nx=rn(0,MAP); ny=rn(MAP-spread,MAP+spread);}
+    else if(side===2){nx=rn(-spread,spread); ny=rn(0,MAP);}
+    else             {nx=rn(MAP-spread,MAP+spread); ny=rn(0,MAP);}
+    S.nebula.push({x:nx,y:ny,r:rn(500,1400),a:nr()*0.15+0.10,
                    col:NEBULA_COLS[ri(0,NEBULA_COLS.length)]});
   }
 
