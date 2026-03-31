@@ -43,8 +43,8 @@ const TRAJ_STEPS = 500;
 const TRAJ_DT    = 1 / 60;
 
 const COMET_SPD  = 290;
-const COMET_MIN  = 9;
-const COMET_MAX  = 18;
+const COMET_MIN  = 5;
+const COMET_MAX  = 11;
 const COMET_LIFE = 25;
 const AIM_CHANCE = 0.70;
 
@@ -428,6 +428,7 @@ function initState() {
     bgStars:[], fuelPopups:[], death:null,
     nearEdge:false, edgeAlarmTimer:0,
     docking:null,
+    extraFuelReady:true,
   };
 }
 
@@ -440,59 +441,85 @@ function genWorld() {
   S.bodies=[]; S.comets=[]; S.objectives=[]; S.lasers=[];
 
   S.bgStars=[];
-  for(let i=0;i<2500;i++)
-    S.bgStars.push({x:nr()*MAP,y:nr()*MAP,r:nr()*1.5+0.3,a:nr()*0.7+0.3});
+  // dim background layer
+  for(let i=0;i<3600;i++)
+    S.bgStars.push({x:nr()*MAP,y:nr()*MAP,r:nr()*0.9+0.2,a:nr()*0.5+0.15,phase:nr()*Math.PI*2,speed:nr()*0.4+0.1,bright:false});
+  // medium twinkling stars
+  for(let i=0;i<900;i++)
+    S.bgStars.push({x:nr()*MAP,y:nr()*MAP,r:nr()*0.8+0.9,a:nr()*0.4+0.55,phase:nr()*Math.PI*2,speed:nr()*1.0+0.5,bright:false});
+  // bright glowing stars
+  for(let i=0;i<120;i++)
+    S.bgStars.push({x:nr()*MAP,y:nr()*MAP,r:nr()*1.2+1.6,a:0.90+nr()*0.10,phase:nr()*Math.PI*2,speed:nr()*1.5+0.8,bright:true});
 
   S.nearEdge=false; S.edgeAlarmTimer=0; S.docking=null;
 
-  // Star
-  const stx=MAP/2+rn(-300,300), sty=MAP/2+rn(-300,300);
-  S.bodies.push({type:'star',x:stx,y:sty,mass:10000,radius:80,color:'#fff5bb',glow:'#ff8800',parentIdx:-1});
+  // Star types: [color, glow, radius, mass]
+  const STAR_TYPES=[
+    ['#fff5cc','#ff8800',80,10000],  // yellow sun
+    ['#ffd8aa','#ff5500',92,12000],  // orange giant
+    ['#cce0ff','#5588ff',62, 8000],  // blue dwarf
+    ['#ffcccc','#ff2200',68, 9000],  // red dwarf
+  ];
 
-  // Planets + moons
   const rings=[950,1400,1950,2550,3200];
   const dens=CONFIG.bodyDensity;
-  const pCount=clamp(Math.round(ri(3,5)*dens),1,rings.length);
-  const pCols=[...PLANET_COLORS].sort(()=>nr()-0.5);
-  const planetIdxs=[];
-  for(let i=0;i<pCount;i++){
-    const ang=ra(),d=rings[i]+rn(-100,100);
-    const pi=S.bodies.length; planetIdxs.push(pi);
-    S.bodies.push({
-      type:'planet',
-      x:clamp(stx+Math.cos(ang)*d,300,MAP-300),
-      y:clamp(sty+Math.sin(ang)*d,300,MAP-300),
-      mass:1000,radius:rn(26,46),color:pCols[i],glow:pCols[i],parentIdx:0,
-    });
-    const moonCount=clamp(Math.round(ri(1,4)*dens),0,7);
-    for(let j=0;j<moonCount;j++){
-      const orR=S.bodies[pi].radius*DRAW_SCALE+rn(160,480),orA=ra();
-      const retrograde=nr()<0.08;  // ~8% chance of retrograde orbit
-      const orS=rn(0.08,0.22)*(retrograde?-1:1);
-      S.bodies.push({
-        type:'moon',
-        x:S.bodies[pi].x+Math.cos(orA)*orR,
-        y:S.bodies[pi].y+Math.sin(orA)*orR,
-        mass:25,radius:rn(2,5),
-        color:MOON_COLORS[ri(0,MOON_COLORS.length)],glow:'#aaaaaa',
-        parentIdx:pi,orbitR:orR,orbitAngle:orA,orbitSpeed:orS,
-      });
-    }
-  }
+  const systemCount=clamp(Math.round(MAP/4500),2,7);
+  const minStarSep=Math.max(4000,MAP*0.30);
+  const margin=MAP*0.14;
 
-  // Asteroid clusters — kept away from map edges (400+ margin)
-  const asteroidIdxs=[];
-  const clusterCount=clamp(Math.round(ri(3,5)*dens),1,10);
-  for(let c=0;c<clusterCount;c++){
-    let cx,cy,att=0;
-    do{cx=rn(600,MAP-600);cy=rn(600,MAP-600);att++;}
-    while(dist(cx,cy,stx,sty)<700&&att<30);
-    const perCluster=clamp(Math.round(ri(5,10)*dens),2,20);
-    for(let j=0;j<perCluster;j++){
+  const starPositions=[];
+  const planetIdxs=[], asteroidIdxs=[];
+
+  for(let s=0;s<systemCount;s++){
+    // Place star well away from map edges and other stars
+    let stx,sty,sat=0;
+    do{
+      stx=rn(margin,MAP-margin); sty=rn(margin,MAP-margin); sat++;
+    } while(sat<100 && starPositions.some(p=>dist(stx,sty,p.x,p.y)<minStarSep));
+    starPositions.push({x:stx,y:sty});
+
+    const [sc,sg,sr,sm]=STAR_TYPES[ri(0,STAR_TYPES.length)];
+    const starIdx=S.bodies.length;
+    S.bodies.push({type:'star',x:stx,y:sty,mass:sm,radius:sr,color:sc,glow:sg,parentIdx:-1});
+
+    // Planets + moons
+    const pCount=clamp(Math.round(ri(3,5)*dens),1,rings.length);
+    const pCols=[...PLANET_COLORS].sort(()=>nr()-0.5);
+    for(let i=0;i<pCount;i++){
+      const ang=ra(),d=rings[i]+rn(-100,100);
+      const pi=S.bodies.length; planetIdxs.push(pi);
+      S.bodies.push({
+        type:'planet',
+        x:clamp(stx+Math.cos(ang)*d,300,MAP-300),
+        y:clamp(sty+Math.sin(ang)*d,300,MAP-300),
+        mass:1000,radius:rn(26,46),color:pCols[i],glow:pCols[i],parentIdx:starIdx,
+      });
+      const moonCount=clamp(Math.round(ri(1,4)*dens),0,7);
+      for(let j=0;j<moonCount;j++){
+        const orR=S.bodies[pi].radius*DRAW_SCALE+rn(160,480),orA=ra();
+        const retrograde=nr()<0.08;
+        const orS=rn(0.08,0.22)*(retrograde?-1:1);
+        S.bodies.push({
+          type:'moon',
+          x:S.bodies[pi].x+Math.cos(orA)*orR,
+          y:S.bodies[pi].y+Math.sin(orA)*orR,
+          mass:25,radius:rn(2,5),
+          color:MOON_COLORS[ri(0,MOON_COLORS.length)],glow:'#aaaaaa',
+          parentIdx:pi,orbitR:orR,orbitAngle:orA,orbitSpeed:orS,
+        });
+      }
+    }
+
+    // Asteroid belt — ring of asteroids beyond outermost planet
+    const beltR=rings[pCount-1]+rn(500,900);
+    const beltN=clamp(Math.round(ri(16,28)*dens),6,48);
+    for(let j=0;j<beltN;j++){
+      const ang=ra(), r=beltR+rn(-200,200);
       const ai=S.bodies.length;
       S.bodies.push({
         type:'asteroid',
-        x:cx+rn(-150,150),y:cy+rn(-150,150),
+        x:clamp(stx+Math.cos(ang)*r,200,MAP-200),
+        y:clamp(sty+Math.sin(ang)*r,200,MAP-200),
         mass:10,radius:rn(6,13),color:'#887766',glow:'#99887a',
         isMining:false,vx:0,vy:0,parentIdx:-1,
       });
@@ -500,28 +527,22 @@ function genWorld() {
     }
   }
 
-  // Ship spawn — well inside map, safe from bodies
-  const edge=ri(0,4);
-  let sx,sy;
-  const spawnBand=500;
-  if      (edge===0){sx=rn(200,spawnBand);          sy=rn(200,MAP-200);}
-  else if (edge===1){sx=rn(MAP-spawnBand,MAP-200);  sy=rn(200,MAP-200);}
-  else if (edge===2){sx=rn(200,MAP-200);             sy=rn(200,spawnBand);}
-  else              {sx=rn(200,MAP-200);             sy=rn(MAP-spawnBand,MAP-200);}
-
-  // Safety: nudge spawn away from any body
-  for(let attempt=0;attempt<40;attempt++){
-    const inside=S.bodies.some(b=>dist(sx,sy,b.x,b.y)<b.radius*DRAW_SCALE+SHIP_R+60);
-    if(!inside) break;
-    sx=clamp(sx+rn(-120,120),200,MAP-200);
-    sy=clamp(sy+rn(-120,120),200,MAP-200);
+  // Ship spawn — in interstellar space, away from all stars and map edges
+  const spawnMargin=MAP*0.14, starClear=2000;
+  let sx=MAP/2, sy=MAP/2;
+  for(let att=0;att<200;att++){
+    const tx=rn(spawnMargin,MAP-spawnMargin), ty=rn(spawnMargin,MAP-spawnMargin);
+    const clearStars=starPositions.every(p=>dist(tx,ty,p.x,p.y)>starClear);
+    const clearBodies=S.bodies.every(b=>dist(tx,ty,b.x,b.y)>b.radius*DRAW_SCALE+SHIP_R+80);
+    if(clearStars&&clearBodies){sx=tx;sy=ty;break;}
   }
 
-  // Small initial drift toward map center so ship doesn't coast off edge
-  const toCenter=Math.atan2(MAP/2-sy,MAP/2-sx);
+  // Face the nearest star on spawn
+  const nearest=starPositions.reduce((a,b)=>dist(sx,sy,a.x,a.y)<dist(sx,sy,b.x,b.y)?a:b);
+  const spawnAngle=Math.atan2(nearest.y-sy,nearest.x-sx)-Math.PI/2;
   S.ship={
-    x:sx,y:sy,vx:Math.cos(toCenter)*8,vy:Math.sin(toCenter)*8,
-    angle:toCenter-Math.PI/2,
+    x:sx,y:sy,vx:0,vy:0,
+    angle:spawnAngle,
     fuel:CONFIG.fuelMax,alive:true,
     thrusting:false,thrustDir:1,zeroFuelTimer:0,laserCooldown:0,
     grace:GRACE_TIME,
@@ -931,8 +952,20 @@ function applyCamera(){
 }
 
 function renderBgStars(){
+  const t=S.time||0;
   for(const s of S.bgStars){
-    ctx.globalAlpha=s.a; ctx.fillStyle='#ffffff';
+    const twinkle=0.65+0.35*Math.sin(t*s.speed+s.phase);
+    const alpha=s.a*twinkle;
+    if(s.bright){
+      // soft radial glow
+      const gr=ctx.createRadialGradient(s.x,s.y,0,s.x,s.y,s.r*4);
+      gr.addColorStop(0,`rgba(180,210,255,${alpha*0.55})`);
+      gr.addColorStop(1,'rgba(180,210,255,0)');
+      ctx.globalAlpha=1;ctx.fillStyle=gr;
+      ctx.beginPath();ctx.arc(s.x,s.y,s.r*4,0,Math.PI*2);ctx.fill();
+    }
+    ctx.globalAlpha=alpha;
+    ctx.fillStyle=s.bright?'#ddeeff':'#ffffff';
     ctx.beginPath();ctx.arc(s.x,s.y,s.r,0,Math.PI*2);ctx.fill();
   }
   ctx.globalAlpha=1;
@@ -1430,6 +1463,17 @@ function renderHUD(){
   ctx.strokeStyle=isLow?fc:'#1a3355';ctx.lineWidth=1;ctx.strokeRect(fx,fy,fw,fh);
 
   ctx.fillStyle=C_LABEL;ctx.font=fnt(20);ctx.fillText('FUEL',fx+fw+10,fy+10);
+  // Emergency fuel tank indicator
+  if(S.extraFuelReady){
+    const et=Date.now()/1000;
+    const pulse=0.7+0.3*Math.sin(et*2.5);
+    ctx.fillStyle=`rgba(80,255,160,${pulse})`;
+    ctx.font='bold '+fnt(18);
+    ctx.fillText('F · EMERGENCY TANK +30%',fx+fw+10,fy+44);
+  } else {
+    ctx.fillStyle='#223344';ctx.font=fnt(18);
+    ctx.fillText('F · tank used (next run)',fx+fw+10,fy+44);
+  }
   ctx.fillStyle=fc;ctx.font=fnt(18);
   ctx.fillText(`${Math.ceil(sh.fuel)} / ${CONFIG.fuelMax}  ·  ${Math.floor(fp*100)}%`,fx+fw+10,fy+26);
 
@@ -1542,7 +1586,7 @@ function renderHUD(){
   ctx.textAlign='left';
   ctx.fillText(ver, 22, ch-14);
   ctx.textAlign='center';
-  ctx.fillText('WASD · SHIFT:boost · SPACE:laser · -/=:zoom · M:map · Tab:settings · `:cheat · R:restart · ESC:pause', cw/2, ch-14);
+  ctx.fillText('WASD · SHIFT:boost · SPACE:laser · F:emerg.fuel · -/=:zoom · M:map · Tab:settings · `:cheat · R:restart · ESC:pause', cw/2, ch-14);
   ctx.textAlign='right';
   ctx.fillText(`×${S.cam.zoom.toFixed(2)}`, cw-16, ch-14);
   if(CONFIG.showFPS){ctx.fillText(`${_fps} fps`,cw-16,ch-34);}
@@ -1614,8 +1658,10 @@ function renderMinimap(){
 // ================================================================
 function renderMenu(){
   const cw=canvas.width,ch=canvas.height;
+  const mt=Date.now()/1000;
   for(const s of S.bgStars){
-    ctx.globalAlpha=s.a*0.55;ctx.fillStyle='#ffffff';
+    const twinkle=0.65+0.35*Math.sin(mt*s.speed+s.phase);
+    ctx.globalAlpha=s.a*twinkle*0.65;ctx.fillStyle=s.bright?'#cce8ff':'#ffffff';
     ctx.beginPath();ctx.arc(s.x%cw,s.y%ch,s.r,0,Math.PI*2);ctx.fill();
   }
   ctx.globalAlpha=1;
@@ -1624,7 +1670,7 @@ function renderMenu(){
   // Title — large, bold cyan
   ctx.fillStyle='#11ddff';
   ctx.font='bold 144px "Orbitron", monospace';
-  ctx.fillText('SPACEHACKER',cw/2,ch*0.38);
+  ctx.fillText('SPACE PIONEER',cw/2,ch*0.38);
 
   // Subtitle
   ctx.fillStyle='#336688';ctx.font=fnt(40);
@@ -1638,7 +1684,7 @@ function renderMenu(){
 
   // Controls
   ctx.fillStyle=C_DIM;ctx.font=fnt(30);
-  ctx.fillText('WASD · SHIFT:boost · SPACE:laser · -/=:zoom · `:cheat',cw/2,ch*0.38+212);
+  ctx.fillText('WASD · SHIFT:boost · SPACE:laser · F:emerg.fuel · -/=:zoom · `:cheat',cw/2,ch*0.38+212);
 
   // Version tag (bottom-right)
   const ver = (window.GAME_VER) || 'dev';
@@ -1857,7 +1903,7 @@ function renderDocking(){
 // MASTER RENDER
 // ================================================================
 function render(){
-  ctx.fillStyle='#00000a';ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle='#020818';ctx.fillRect(0,0,canvas.width,canvas.height);
   if(S.phase==='menu'){renderMenu();return;}
 
   ctx.save();applyCamera();
@@ -1923,6 +1969,15 @@ window.addEventListener('keydown',e=>{
     case 'Space':
       if(S.phase==='playing') fireLaser();
       break;
+    case 'KeyF':
+      if(S.phase==='playing'&&S.extraFuelReady&&S.ship.alive){
+        const bonus=Math.round(CONFIG.fuelMax*0.30);
+        S.ship.fuel=Math.min(CONFIG.fuelMax,S.ship.fuel+bonus);
+        S.fuelPopups.push({amount:bonus,alpha:1.0,dy:0});
+        S.extraFuelReady=false;
+        playChime();
+      }
+      break;
   }
 },{passive:false});
 window.addEventListener('keyup',e=>{keys[e.code]=false;});
@@ -1938,6 +1993,7 @@ function startRun(){
   _resetMusic();
   if(S.phase==='dead') S.runCount=(S.runCount||0)+1;
   S.phase='playing';S.cheat=false;S.showMinimap=true;
+  S.extraFuelReady=(S.runCount%2===0);
   genWorld();
 }
 
@@ -1962,8 +2018,10 @@ function loop(ts){
 function init(){
   initState();
   S.bgStars=[];
-  for(let i=0;i<200;i++)
-    S.bgStars.push({x:Math.random()*MAP,y:Math.random()*MAP,r:Math.random()*1.5+0.3,a:Math.random()*0.7+0.3});
+  for(let i=0;i<300;i++)
+    S.bgStars.push({x:Math.random()*MAP,y:Math.random()*MAP,r:Math.random()*0.9+0.3,a:Math.random()*0.5+0.2,phase:Math.random()*Math.PI*2,speed:Math.random()*0.8+0.2,bright:false});
+  for(let i=0;i<30;i++)
+    S.bgStars.push({x:Math.random()*MAP,y:Math.random()*MAP,r:Math.random()*1.2+1.4,a:0.85+Math.random()*0.15,phase:Math.random()*Math.PI*2,speed:Math.random()*1.5+0.8,bright:true});
   requestAnimationFrame(ts=>{lastTs=ts;loop(ts);});
 }
 

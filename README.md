@@ -1,8 +1,8 @@
-# Spacehacker
+# Space Pioneer
 
-A 2D gravity-assist strategy game. Pilot a spacecraft through procedurally generated solar systems, use the gravity wells of planets to slingshot yourself toward your objective, and try not to become debris.
+A 2D gravity-assist strategy game. Pilot a spacecraft through a procedurally generated galaxy of multiple star systems, use the gravity wells of planets to slingshot yourself toward your objective, and try not to become debris.
 
-Each run generates a fresh map. Difficulty tiers unlock as you complete runs. No install required.
+Each run generates a fresh map with 2–7 star systems. Difficulty tiers unlock as you complete runs. No install required.
 
 ---
 
@@ -23,6 +23,7 @@ Open `index.html` in any modern browser. That's it.
 | `A` / `←` / `D` / `→` | Rotate ship |
 | `Shift` | Boost — 2× thrust, burns fuel faster |
 | `Space` | Fire laser (destroys asteroids and comets; costs fuel) |
+| `F` | Emergency fuel tank — add 30% fuel (available every other run) |
 
 ### Navigation & UI
 
@@ -73,4 +74,4 @@ Gravity is the point of the game, not just an obstacle. Learn to read it and use
 
 ## About
 
-Spacehacker is a pure HTML5 game. No frameworks, no server, no install. Just open `index.html` and fly.
+Space Pioneer is a pure HTML5 game. No frameworks, no server, no install. Just open `index.html` and fly.
