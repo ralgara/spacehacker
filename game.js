@@ -429,6 +429,7 @@ function initState() {
     nearEdge:false, edgeAlarmTimer:0,
     docking:null,
     extraFuelReady:true,
+    gravContours:false,
   };
 }
 
@@ -1383,6 +1384,97 @@ function renderLasers(){
 
 // Spheres of influence — shown in cheat mode as dotted circles
 // Radius where body gravity = SOI_ACCEL (10% of max thrust)
+function renderGravContours(){
+  if(!S.gravContours||!S.cheat) return;
+
+  const cw=canvas.width, ch=canvas.height;
+  const hw=cw/2/S.cam.zoom, hh=ch/2/S.cam.zoom;
+  const wx0=S.cam.x-hw, wy0=S.cam.y-hh;
+  const ww=hw*2, wh=hh*2;
+
+  const COLS=80, ROWS=60;
+  const wStep=ww/COLS, hStep=wh/ROWS;
+  const W=COLS+1, H=ROWS+1;
+
+  // Stars and planets dominate at game scales; skip moons/asteroids
+  const bodies=S.bodies.filter(b=>b.type==='star'||b.type==='planet');
+  if(!bodies.length) return;
+
+  const Geff=G*CONFIG.gravMult;
+
+  // Sample gravitational acceleration magnitude on the visible-world grid
+  const field=new Float32Array(W*H);
+  for(let r=0;r<H;r++){
+    const wy=wy0+r*hStep;
+    for(let c=0;c<W;c++){
+      const wx=wx0+c*wStep;
+      let ax=0,ay=0;
+      for(const b of bodies){
+        const dx=b.x-wx, dy=b.y-wy;
+        const r2=dx*dx+dy*dy;
+        if(r2<400) continue;
+        const inv=1/Math.sqrt(r2);
+        const f=Geff*b.mass*inv*inv;
+        ax+=f*dx*inv; ay+=f*dy*inv;
+      }
+      field[r*W+c]=Math.hypot(ax,ay);
+    }
+  }
+
+  // Contour levels (grav acceleration), colours, alphas (dim → bright = weak → strong)
+  const LEVELS=[  1,   4,  16,  64, 256];
+  const COLORS=['#0a3050','#0a5088','#0a80bb','#00aad4','#00ddff'];
+  const ALPHAS=[0.35,  0.40,  0.45,  0.55,  0.65];
+
+  ctx.save();
+  ctx.lineCap='round'; ctx.lineJoin='round';
+
+  for(let li=0;li<LEVELS.length;li++){
+    const lv=LEVELS[li];
+    ctx.strokeStyle=COLORS[li];
+    ctx.lineWidth=1.2/S.cam.zoom;
+    ctx.globalAlpha=ALPHAS[li];
+    ctx.beginPath();
+
+    for(let r=0;r<ROWS;r++){
+      for(let c=0;c<COLS;c++){
+        const f00=field[r*W+c],     f10=field[r*W+c+1];
+        const f01=field[(r+1)*W+c], f11=field[(r+1)*W+c+1];
+        const x0=wx0+c*wStep, x1=x0+wStep;
+        const y0=wy0+r*hStep, y1=y0+hStep;
+
+        const b00=f00>=lv, b10=f10>=lv, b01=f01>=lv, b11=f11>=lv;
+        const eT=b00!==b10, eR=b10!==b11, eB=b01!==b11, eL=b00!==b01;
+        if(!eT&&!eR&&!eB&&!eL) continue;
+
+        // Interpolated crossing points for each crossed edge
+        const pt=eT?{x:x0+wStep*(lv-f00)/(f10-f00),y:y0}:null;
+        const pr=eR?{x:x1,y:y0+hStep*(lv-f10)/(f11-f10)}:null;
+        const pb=eB?{x:x0+wStep*(lv-f01)/(f11-f01),y:y1}:null;
+        const pl=eL?{x:x0,y:y0+hStep*(lv-f00)/(f01-f00)}:null;
+
+        const pts=[pt,pr,pb,pl].filter(Boolean);
+
+        if(pts.length===2){
+          ctx.moveTo(pts[0].x,pts[0].y);
+          ctx.lineTo(pts[1].x,pts[1].y);
+        } else if(pts.length===4){
+          // Saddle — resolve topology by diagonal pair that is above threshold
+          if(b00&&b11){ // TL+BR above: arc top↔left and right↔bottom
+            ctx.moveTo(pt.x,pt.y); ctx.lineTo(pl.x,pl.y);
+            ctx.moveTo(pr.x,pr.y); ctx.lineTo(pb.x,pb.y);
+          } else {      // TR+BL above: arc top↔right and bottom↔left
+            ctx.moveTo(pt.x,pt.y); ctx.lineTo(pr.x,pr.y);
+            ctx.moveTo(pb.x,pb.y); ctx.lineTo(pl.x,pl.y);
+          }
+        }
+      }
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function renderSOI(){
   ctx.save();
   ctx.setLineDash([6,10]);
@@ -1565,7 +1657,8 @@ function renderHUD(){
   // ---- Cheat mode ----
   if(S.cheat){
     ctx.fillStyle=C_WARN;ctx.font='bold '+fnt(30);
-    ctx.textAlign='center';ctx.fillText('⚠  CHEAT MODE  —  trajectory + SOI circles',cw/2,28);ctx.textAlign='left';
+    const gravLabel=S.gravContours?'grav contours ON':'G:grav contours';
+    ctx.textAlign='center';ctx.fillText(`⚠  CHEAT MODE  —  trajectory · SOI · ${gravLabel}`,cw/2,28);ctx.textAlign='left';
   }
 
   // Wave number — top right
@@ -1910,6 +2003,7 @@ function render(){
   renderBgStars();
   renderNebula();
   if(S.cheat) renderSOI();
+  if(S.cheat) renderGravContours();
   renderBodies();renderComets();
   renderObjMarkers();renderLasers();
   if(S.ship.alive) renderShip();
@@ -1956,6 +2050,9 @@ window.addEventListener('keydown',e=>{
       break;
     case 'Backquote':
       if(S.phase==='playing') S.cheat=!S.cheat;
+      break;
+    case 'KeyG':
+      if(S.phase==='playing'&&S.cheat) S.gravContours=!S.gravContours;
       break;
     case 'Minus':
       S.cam.zoom=Math.max(ZOOM_MIN,+(S.cam.zoom-ZOOM_STEP).toFixed(2));
