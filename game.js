@@ -90,7 +90,7 @@ const RISK_PRESETS = [
 // ================================================================
 // UI STATE
 // ================================================================
-const UI = { configOpen: false };
+const UI = { configOpen: false, configPaused: false };
 let _configBtns = [];   // rebuilt each renderConfig frame
 
 // ================================================================
@@ -1496,6 +1496,29 @@ function renderGravVector(){
   ctx.restore();
 }
 
+function renderAccelVector(){
+  const sh=S.ship;
+  const boosting=keys.ShiftLeft||keys.ShiftRight;
+  const thr=THRUST*(boosting?BOOST_MULT:1)*(sh.thrustDir>0?1:0.4);
+  const nx=Math.sin(sh.angle)*sh.thrustDir;
+  const ny=-Math.cos(sh.angle)*sh.thrustDir;
+  const sc=CONFIG.gravVectorScale;
+  const len=clamp(thr*0.6,22,90)*sc;
+  const ex=sh.x+nx*len,ey=sh.y+ny*len;
+  const ang=Math.atan2(ny,nx);
+  const as=9/S.cam.zoom;
+  ctx.save();
+  ctx.strokeStyle='rgba(0,220,255,0.85)';ctx.fillStyle='rgba(0,220,255,0.85)';
+  ctx.lineWidth=2/S.cam.zoom;
+  ctx.beginPath();ctx.moveTo(sh.x,sh.y);ctx.lineTo(ex,ey);ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(ex,ey);
+  ctx.lineTo(ex-as*Math.cos(ang-0.42),ey-as*Math.sin(ang-0.42));
+  ctx.lineTo(ex-as*Math.cos(ang+0.42),ey-as*Math.sin(ang+0.42));
+  ctx.closePath();ctx.fill();
+  ctx.restore();
+}
+
 function updateExplosion(dt){
   if(!S.explosion) return;
   const p=S.explosion.particles;
@@ -1578,14 +1601,14 @@ function renderGravContours(){
     }
   }
 
-  // 8 log-spaced iso-levels spanning interstellar → stellar surface
-  // G=1950, star mass~10000: a = 19.5M/r²
-  //   r≈8000 → a≈0.3,  r≈4400 → a≈1,  r≈2500 → a≈3,  r≈1400 → a≈10
-  //   r≈800  → a≈30,   r≈440  → a≈100, r≈255  → a≈300, r≈140  → a≈1000
-  const LEVELS=[0.3, 1, 3, 10, 30, 100, 300, 1000];
-  const COLORS=['#0a2840','#0a3f6a','#0a5c94','#0a80bb','#00a0cc','#00bcd4','#00d8e8','#80f0ff'];
-  const ALPHAS=[0.30,  0.35,  0.40,  0.45,  0.50,  0.58,  0.65,  0.72];
-  const WIDTHS=[1.0,   1.0,   1.1,   1.2,   1.3,   1.4,   1.5,   1.6]; // px, pre-zoom
+  // Log-spaced iso-levels 0.3→1000; count scales with fieldLineDensity so
+  // Sparse(0.5)=4 levels, Normal(1.0)=8, Dense(1.5)=12, Fine(2.0)=16
+  const nLev=Math.max(2,Math.round(8*CONFIG.fieldLineDensity));
+  const logMin=Math.log10(0.3),logMax=Math.log10(1000);
+  const LEVELS=Array.from({length:nLev},(_,i)=>Math.pow(10,logMin+(logMax-logMin)*i/Math.max(nLev-1,1)));
+  const COLORS=LEVELS.map((_,i)=>{const t=i/Math.max(nLev-1,1);return`rgb(${Math.round(t*128)},${Math.round(40+t*200)},${Math.round(64+t*191)})`;});
+  const ALPHAS=LEVELS.map((_,i)=>0.30+(i/Math.max(nLev-1,1))*0.42);
+  const WIDTHS=LEVELS.map((_,i)=>1.0+(i/Math.max(nLev-1,1))*0.6);
 
   ctx.save();
   ctx.lineCap='round'; ctx.lineJoin='round';
@@ -1779,6 +1802,24 @@ function renderHUD(){
     ctx.fillText(`SPD  ${spd}`,fx,statY);
   }
 
+  // ---- Cheat HUD: gravity magnitude + bearing ----
+  let gravHudH=0;
+  if(S.cheat&&sh.alive){
+    const g=gravAt(sh.x,sh.y);
+    const gMag=Math.hypot(g.ax,g.ay);
+    if(gMag>=0.5){
+      const fwdX=Math.sin(sh.angle),fwdY=-Math.cos(sh.angle);
+      const gnx=g.ax/gMag,gny=g.ay/gMag;
+      const cross=fwdX*gny-fwdY*gnx;
+      const dot=fwdX*gnx+fwdY*gny;
+      const bearDeg=Math.round(Math.atan2(cross,dot)*180/Math.PI);
+      const bearStr=bearDeg===0?'fwd':Math.abs(bearDeg)>=175?'aft':`${Math.abs(bearDeg)}° ${cross>=0?'R':'L'}`;
+      ctx.fillStyle=C_LABEL;ctx.font=fnt(22);
+      ctx.fillText(`GRAV  ${gMag.toFixed(1)} u/s²  ·  ${bearStr}`,fx,statY+28);
+      gravHudH=28;
+    }
+  }
+
   // Grace indicator
   if(sh.grace>0){
     ctx.fillStyle='rgba(80,200,255,0.7)';ctx.font='bold '+fnt(26);
@@ -1796,7 +1837,7 @@ function renderHUD(){
 
   // ---- Objectives ----
   ctx.font=fnt(30);
-  const oy=statY+36;
+  const oy=statY+36+gravHudH;
   for(let i=0;i<S.objectives.length;i++){
     const obj=S.objectives[i];
     ctx.fillStyle=obj.complete?C_GOOD:obj.color;
@@ -1825,8 +1866,8 @@ function renderHUD(){
   // ---- Cheat mode ----
   if(S.cheat){
     ctx.fillStyle=C_WARN;ctx.font='bold '+fnt(30);
-    const gravLabel=CONFIG.gravContours?'grav contours ON':'G:grav contours';
-    ctx.textAlign='center';ctx.fillText(`⚠  CHEAT MODE  —  trajectory · SOI · ${gravLabel}`,cw/2,28);ctx.textAlign='left';
+    const gravLabel=CONFIG.gravContours?'grav field ON':'G:grav field';
+    ctx.textAlign='center';ctx.fillText(`⚠  CHEAT MODE  —  trajectory · SOI · grav/accel vectors · ${gravLabel}`,cw/2,28);ctx.textAlign='left';
   }
 
   // Wave number — top right
@@ -2169,7 +2210,7 @@ function handleConfigClick(mx,my){
   // Click outside panel closes it
   const cw=canvas.width,ch=canvas.height,pw=500,ph=700;
   const px=(cw-pw)/2,py=Math.max(8,(ch-ph)/2);
-  if(mx<px||mx>px+pw||my<py||my>py+ph) UI.configOpen=false;
+  if(mx<px||mx>px+pw||my<py||my>py+ph){UI.configOpen=false;if(UI.configPaused){S.phase='playing';UI.configPaused=false;}}
 }
 
 function renderDocking(){
@@ -2224,6 +2265,7 @@ function render(){
   renderBoostTrail();
   if(S.ship.alive) renderShip();
   if(S.cheat&&S.ship.alive) renderGravVector();
+  if(S.cheat&&S.ship.alive&&S.ship.thrusting) renderAccelVector();
   renderExplosion();
   ctx.restore();
 
@@ -2231,7 +2273,7 @@ function render(){
   if(S.docking) renderDocking();
   if(S.cheat&&S.ship.alive&&S.phase==='playing') renderTraj();
   if(S.phase==='playing'||S.phase==='paused') renderHUD();
-  if(S.phase==='paused') renderPause();
+  if(S.phase==='paused'&&!UI.configOpen) renderPause();
   if(S.phase==='dead')  {renderHUD();renderDead();}
   if(UI.configOpen) renderConfig();
 }
@@ -2251,10 +2293,16 @@ window.addEventListener('keydown',e=>{
   switch(e.code){
     case 'Tab':
       e.preventDefault();
-      UI.configOpen=!UI.configOpen;
+      if(!UI.configOpen){
+        UI.configOpen=true;
+        if(S.phase==='playing'){S.phase='paused';UI.configPaused=true;}
+      } else {
+        UI.configOpen=false;
+        if(UI.configPaused){S.phase='playing';UI.configPaused=false;}
+      }
       break;
     case 'Escape':
-      if(UI.configOpen){UI.configOpen=false;break;}
+      if(UI.configOpen){UI.configOpen=false;if(UI.configPaused){S.phase='playing';UI.configPaused=false;}break;}
       if(S.phase==='playing')     S.phase='paused';
       else if(S.phase==='paused') S.phase='playing';
       else if(S.phase==='dead') S.phase='menu';
