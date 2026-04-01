@@ -64,6 +64,10 @@ const CONFIG = {
   refuelMult:   1.0,   // multiplier on all fuel rewards
   mapSize:      12000, // applied at next genWorld()
   bodyDensity:  1.0,   // multiplier on planet/asteroid/moon counts
+  // cheats
+  gravContours:    false,
+  gravVectorScale: 1.0,   // length multiplier on the grav arrow
+  fieldLineDensity:1.0,   // multiplier on contour grid resolution (higher = more lines)
 };
 
 const COMET_PRESETS  = [['Off',0],['Light',0.5],['Normal',1.0],['Heavy',2.5]];
@@ -72,6 +76,16 @@ const FUEL_PRESETS    = [['500',500],['1000',1000],['2000',2000]];
 const REFUEL_PRESETS  = [['×½',0.5],['×1',1.0],['×1½',1.5],['×2',2.0]];
 const MAP_PRESETS     = [['Small',8000],['Med',12000],['Large',20000],['Huge',40000]];
 const DENSITY_PRESETS = [['Sparse',0.5],['Normal',1.0],['Dense',1.5],['Packed',2.0]];
+const GRAV_VECTOR_PRESETS  = [['×½',0.5],['×1',1.0],['×2',2.0],['×4',4.0]];
+const FIELD_DENSITY_PRESETS= [['Sparse',0.5],['Normal',1.0],['Dense',1.5],['Fine',2.0]];
+
+// Risk-level presets bundle: [label, {gravMult,cometRate,fuelMax,refuelMult}]
+const RISK_PRESETS = [
+  ['Routine',   {gravMult:0.5,  cometRate:0.5,  fuelMax:2000, refuelMult:2.0}],
+  ['Challenge', {gravMult:1.0,  cometRate:1.0,  fuelMax:1000, refuelMult:1.0}],
+  ['Danger',    {gravMult:1.5,  cometRate:2.5,  fuelMax:500,  refuelMult:0.5}],
+  ['Nerves',    {gravMult:2.0,  cometRate:2.5,  fuelMax:500,  refuelMult:0.5}],
+];
 
 // ================================================================
 // UI STATE
@@ -439,7 +453,7 @@ function initState() {
     nearEdge:false, edgeAlarmTimer:0,
     docking:null,
     extraFuelReady:true,
-    gravContours:false,
+    explosion:null,
     boostTrail:[],
   };
 }
@@ -463,7 +477,7 @@ function genWorld() {
   for(let i=0;i<120;i++)
     S.bgStars.push({x:nr()*MAP,y:nr()*MAP,r:nr()*1.2+1.6,a:0.90+nr()*0.10,phase:nr()*Math.PI*2,speed:nr()*1.5+0.8,bright:true});
 
-  S.nearEdge=false; S.edgeAlarmTimer=0; S.docking=null;
+  S.nearEdge=false; S.edgeAlarmTimer=0; S.docking=null; S.explosion=null;
 
   // Star types: [color, glow, radius, mass]
   const STAR_TYPES=[
@@ -731,6 +745,24 @@ function updatePhysics(dt){
 function killShip(cause){
   S.ship.alive=false; S.phase='dead';
   S.death={cause,message:deathMsg(cause)};
+  // Explosion on physical impacts (not fuel drain or out-of-bounds)
+  if(cause!=='fuel'&&cause!=='oob'){
+    const sh=S.ship;
+    const EXCOLORS=['#ff6600','#ffaa00','#ffffff','#ff3300','#ffdd44','#ff8833','#ffcc99'];
+    const particles=[];
+    for(let i=0;i<32;i++){
+      const ang=Math.random()*Math.PI*2;
+      const spd=40+Math.random()*200;
+      const life=0.5+Math.random()*1.5;
+      particles.push({x:sh.x,y:sh.y,
+        vx:Math.cos(ang)*spd+sh.vx*0.4,
+        vy:Math.sin(ang)*spd+sh.vy*0.4,
+        r:1.5+Math.random()*5,
+        color:EXCOLORS[Math.floor(Math.random()*EXCOLORS.length)],
+        life,maxLife:life});
+    }
+    S.explosion={particles};
+  }
   playDeathSfx();
 }
 
@@ -1445,7 +1477,8 @@ function renderGravVector(){
   const g=gravAt(sh.x,sh.y);
   const mag=Math.hypot(g.ax,g.ay);
   if(mag<0.5) return;
-  const len=clamp(mag*0.6,22,90);
+  const sc=CONFIG.gravVectorScale;
+  const len=clamp(mag*0.6,22,90)*sc;
   const nx=g.ax/mag, ny=g.ay/mag;
   const ex=sh.x+nx*len, ey=sh.y+ny*len;
   const ang=Math.atan2(ny,nx);
@@ -1460,6 +1493,32 @@ function renderGravVector(){
   ctx.lineTo(ex-as*Math.cos(ang+0.42),ey-as*Math.sin(ang+0.42));
   ctx.closePath();ctx.fill();
   ctx.restore();
+}
+
+function updateExplosion(dt){
+  if(!S.explosion) return;
+  const p=S.explosion.particles;
+  for(let i=p.length-1;i>=0;i--){
+    const q=p[i];
+    q.x+=q.vx*dt; q.y+=q.vy*dt;
+    q.vx*=0.94; q.vy*=0.94; // drag
+    q.life-=dt;
+    if(q.life<=0) p.splice(i,1);
+  }
+  if(p.length===0) S.explosion=null;
+}
+
+function renderExplosion(){
+  if(!S.explosion) return;
+  ctx.save();
+  for(const q of S.explosion.particles){
+    const a=Math.max(0,q.life/q.maxLife);
+    ctx.globalAlpha=a*0.9;
+    ctx.fillStyle=q.color;
+    ctx.shadowColor=q.color; ctx.shadowBlur=10*a;
+    ctx.beginPath();ctx.arc(q.x,q.y,q.r*a*0.6+q.r*0.4,0,Math.PI*2);ctx.fill();
+  }
+  ctx.shadowBlur=0;ctx.restore();
 }
 
 function renderLasers(){
@@ -1480,14 +1539,15 @@ function renderLasers(){
 // Spheres of influence — shown in cheat mode as dotted circles
 // Radius where body gravity = SOI_ACCEL (10% of max thrust)
 function renderGravContours(){
-  if(!S.gravContours||!S.cheat) return;
+  if(!CONFIG.gravContours||!S.cheat) return;
 
   const cw=canvas.width, ch=canvas.height;
   const hw=cw/2/S.cam.zoom, hh=ch/2/S.cam.zoom;
   const wx0=S.cam.x-hw, wy0=S.cam.y-hh;
   const ww=hw*2, wh=hh*2;
 
-  const COLS=80, ROWS=60;
+  const d=CONFIG.fieldLineDensity;
+  const COLS=Math.round(80*d), ROWS=Math.round(60*d);
   const wStep=ww/COLS, hStep=wh/ROWS;
   const W=COLS+1, H=ROWS+1;
 
@@ -1759,7 +1819,7 @@ function renderHUD(){
   // ---- Cheat mode ----
   if(S.cheat){
     ctx.fillStyle=C_WARN;ctx.font='bold '+fnt(30);
-    const gravLabel=S.gravContours?'grav contours ON':'G:grav contours';
+    const gravLabel=CONFIG.gravContours?'grav contours ON':'G:grav contours';
     ctx.textAlign='center';ctx.fillText(`⚠  CHEAT MODE  —  trajectory · SOI · ${gravLabel}`,cw/2,28);ctx.textAlign='left';
   }
 
@@ -1955,7 +2015,7 @@ function _cfgBtn(label,active,x,y,w,h,action){
 
 function renderConfig(){
   const cw=canvas.width,ch=canvas.height;
-  const pw=480,ph=556,px=(cw-pw)/2,py=(ch-ph)/2;
+  const pw=500,ph=700,px=(cw-pw)/2,py=Math.max(8,(ch-ph)/2);
   _configBtns=[];
 
   ctx.fillStyle='rgba(4,8,20,0.96)';
@@ -1968,13 +2028,27 @@ function renderConfig(){
   ctx.fillStyle=C_DIM;ctx.font=fnt(18);
   ctx.fillText('Tab · close',cw/2,py+58);
 
-  const lx=px+18,bh=34,gap=8,labelW=120;
+  const lx=px+18,bh=34,gap=8,labelW=130;
   let row=py+78;
 
+  // ---- Risk Level ----
+  ctx.fillStyle=C_VALUE;ctx.font=fnt(21);ctx.textAlign='left';
+  ctx.fillText('RISK',lx,row+bh*0.67);
+  const rlW=Math.floor((pw-36-labelW-gap*3)/4);
+  RISK_PRESETS.forEach(([lbl,vals],i)=>{
+    const active=CONFIG.gravMult===vals.gravMult&&CONFIG.cometRate===vals.cometRate&&
+                 CONFIG.fuelMax===vals.fuelMax&&CONFIG.refuelMult===vals.refuelMult;
+    _cfgBtn(lbl,active,lx+labelW+i*(rlW+gap),row,rlW,bh,()=>{
+      CONFIG.gravMult=vals.gravMult; CONFIG.cometRate=vals.cometRate;
+      CONFIG.fuelMax=vals.fuelMax;   CONFIG.refuelMult=vals.refuelMult;
+    });
+  });
+
+  row+=bh+10;
   // Gravity
   ctx.fillStyle=C_VALUE;ctx.font=fnt(21);ctx.textAlign='left';
   ctx.fillText('GRAVITY',lx,row+bh*0.67);
-  const gw=58;
+  const gw=56;
   GRAV_PRESETS.forEach(([lbl,val],i)=>{
     _cfgBtn(lbl,CONFIG.gravMult===val,lx+labelW+i*(gw+gap),row,gw,bh,()=>{CONFIG.gravMult=val;});
   });
@@ -1983,7 +2057,7 @@ function renderConfig(){
   // Comets
   ctx.fillStyle=C_VALUE;ctx.font=fnt(21);ctx.textAlign='left';
   ctx.fillText('COMETS',lx,row+bh*0.67);
-  const cw2=70;
+  const cw2=68;
   COMET_PRESETS.forEach(([lbl,val],i)=>{
     _cfgBtn(lbl,CONFIG.cometRate===val,lx+labelW+i*(cw2+gap),row,cw2,bh,()=>{CONFIG.cometRate=val;});
   });
@@ -2002,7 +2076,7 @@ function renderConfig(){
   _cfgBtn('On', CONFIG.showFPS, lx+labelW,     row,76,bh,()=>{CONFIG.showFPS=true;});
   _cfgBtn('Off',!CONFIG.showFPS,lx+labelW+84,  row,76,bh,()=>{CONFIG.showFPS=false;});
 
-  // Divider
+  // ---- next-run divider ----
   row+=bh+14;
   ctx.strokeStyle='#1a2a44';ctx.lineWidth=1;
   ctx.beginPath();ctx.moveTo(px+16,row);ctx.lineTo(px+pw-16,row);ctx.stroke();
@@ -2013,7 +2087,7 @@ function renderConfig(){
   // Max Fuel
   ctx.fillStyle=C_VALUE;ctx.font=fnt(21);ctx.textAlign='left';
   ctx.fillText('MAX FUEL',lx,row+bh*0.67);
-  const fw=82;
+  const fw=80;
   FUEL_PRESETS.forEach(([lbl,val],i)=>{
     _cfgBtn(lbl,CONFIG.fuelMax===val,lx+labelW+i*(fw+gap),row,fw,bh,()=>{CONFIG.fuelMax=val;});
   });
@@ -2022,7 +2096,7 @@ function renderConfig(){
   // Refuel factor
   ctx.fillStyle=C_VALUE;ctx.font=fnt(21);ctx.textAlign='left';
   ctx.fillText('REFUEL',lx,row+bh*0.67);
-  const rfw=70;
+  const rfw=68;
   REFUEL_PRESETS.forEach(([lbl,val],i)=>{
     _cfgBtn(lbl,CONFIG.refuelMult===val,lx+labelW+i*(rfw+gap),row,rfw,bh,()=>{CONFIG.refuelMult=val;});
   });
@@ -2031,7 +2105,7 @@ function renderConfig(){
   // Map size
   ctx.fillStyle=C_VALUE;ctx.font=fnt(21);ctx.textAlign='left';
   ctx.fillText('MAP SIZE',lx,row+bh*0.67);
-  const mw=72;
+  const mw=70;
   MAP_PRESETS.forEach(([lbl,val],i)=>{
     _cfgBtn(lbl,CONFIG.mapSize===val,lx+labelW+i*(mw+gap),row,mw,bh,()=>{CONFIG.mapSize=val;});
   });
@@ -2040,9 +2114,41 @@ function renderConfig(){
   // Body density
   ctx.fillStyle=C_VALUE;ctx.font=fnt(21);ctx.textAlign='left';
   ctx.fillText('BODIES',lx,row+bh*0.67);
-  const dw=72;
+  const dw=70;
   DENSITY_PRESETS.forEach(([lbl,val],i)=>{
     _cfgBtn(lbl,CONFIG.bodyDensity===val,lx+labelW+i*(dw+gap),row,dw,bh,()=>{CONFIG.bodyDensity=val;});
+  });
+
+  // ---- cheats divider ----
+  row+=bh+14;
+  ctx.strokeStyle='#1a2a44';ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(px+16,row);ctx.lineTo(px+pw-16,row);ctx.stroke();
+  ctx.fillStyle='#334466';ctx.font='bold '+fnt(17);ctx.textAlign='center';
+  ctx.fillText('CHEATS  (active in cheat mode only — ` key)',cw/2,row+14);
+  row+=22;
+
+  // Grav Contours toggle
+  ctx.fillStyle=C_VALUE;ctx.font=fnt(21);ctx.textAlign='left';
+  ctx.fillText('GRAV FIELD',lx,row+bh*0.67);
+  _cfgBtn('On', CONFIG.gravContours, lx+labelW,     row,76,bh,()=>{CONFIG.gravContours=true;});
+  _cfgBtn('Off',!CONFIG.gravContours,lx+labelW+84,  row,76,bh,()=>{CONFIG.gravContours=false;});
+
+  row+=bh+10;
+  // Gravity vector scale
+  ctx.fillStyle=C_VALUE;ctx.font=fnt(21);ctx.textAlign='left';
+  ctx.fillText('VEC SCALE',lx,row+bh*0.67);
+  const vw=64;
+  GRAV_VECTOR_PRESETS.forEach(([lbl,val],i)=>{
+    _cfgBtn(lbl,CONFIG.gravVectorScale===val,lx+labelW+i*(vw+gap),row,vw,bh,()=>{CONFIG.gravVectorScale=val;});
+  });
+
+  row+=bh+10;
+  // Field line density
+  ctx.fillStyle=C_VALUE;ctx.font=fnt(21);ctx.textAlign='left';
+  ctx.fillText('FIELD LINES',lx,row+bh*0.67);
+  const fdw=68;
+  FIELD_DENSITY_PRESETS.forEach(([lbl,val],i)=>{
+    _cfgBtn(lbl,CONFIG.fieldLineDensity===val,lx+labelW+i*(fdw+gap),row,fdw,bh,()=>{CONFIG.fieldLineDensity=val;});
   });
 
   ctx.textAlign='left';
@@ -2054,8 +2160,8 @@ function handleConfigClick(mx,my){
     if(mx>=x&&mx<=x+w&&my>=y&&my<=y+h){b.action();return;}
   }
   // Click outside panel closes it
-  const cw=canvas.width,ch=canvas.height,pw=480,ph=556;
-  const px=(cw-pw)/2,py=(ch-ph)/2;
+  const cw=canvas.width,ch=canvas.height,pw=500,ph=700;
+  const px=(cw-pw)/2,py=Math.max(8,(ch-ph)/2);
   if(mx<px||mx>px+pw||my<py||my>py+ph) UI.configOpen=false;
 }
 
@@ -2111,6 +2217,7 @@ function render(){
   renderBoostTrail();
   if(S.ship.alive) renderShip();
   if(S.cheat&&S.ship.alive) renderGravVector();
+  renderExplosion();
   ctx.restore();
 
   renderVignette();
@@ -2155,7 +2262,7 @@ window.addEventListener('keydown',e=>{
       if(S.phase==='playing') S.cheat=!S.cheat;
       break;
     case 'KeyG':
-      if(S.phase==='playing'&&S.cheat) S.gravContours=!S.gravContours;
+      if(S.phase==='playing'&&S.cheat) CONFIG.gravContours=!CONFIG.gravContours;
       break;
     case 'Minus':
       S.cam.zoom=Math.max(ZOOM_MIN,+(S.cam.zoom-ZOOM_STEP).toFixed(2));
@@ -2208,6 +2315,7 @@ function loop(ts){
     updatePhysics(dt);updateLasers(dt);
     updateObjectives(dt);updateDocking(dt);updateFuelPopups(dt);updateEdgeWarning(dt);updateAudio(dt);
   }
+  updateExplosion(dt);
   render();
   requestAnimationFrame(loop);
 }
