@@ -249,7 +249,13 @@ function initAudio() {
     nSrc.connect(nFilt); nFilt.connect(nGain); nGain.connect(master);
     nSrc.start();
 
-    AUD = { ctx, master, filt, revDelay, nGain };
+    // Boost bass — deep sine rumble when shift-thrusting
+    const boostOsc=ctx.createOscillator(); boostOsc.type='sine'; boostOsc.frequency.value=46;
+    const boostGain=ctx.createGain(); boostGain.gain.value=0;
+    boostOsc.connect(boostGain); boostGain.connect(master);
+    boostOsc.start();
+
+    AUD = { ctx, master, filt, revDelay, nGain, boostGain };
     _resetMusic();
   } catch(e) { console.warn('Web Audio unavailable:', e); AUD=null; }
 }
@@ -342,6 +348,10 @@ function updateAudio(dt) {
   // Thrust noise
   const thr = S.ship.alive && S.ship.thrusting && S.ship.fuel>0;
   AUD.nGain.gain.setTargetAtTime(thr?0.13:0, AUD.ctx.currentTime, 0.09);
+
+  // Boost bass
+  const boosting = thr && (keys.ShiftLeft||keys.ShiftRight);
+  AUD.boostGain.gain.setTargetAtTime(boosting?0.055:0, AUD.ctx.currentTime, 0.15);
 }
 
 function playChime() {
@@ -430,6 +440,7 @@ function initState() {
     docking:null,
     extraFuelReady:true,
     gravContours:false,
+    boostTrail:[],
   };
 }
 
@@ -563,36 +574,88 @@ function safePos(){
   return{x:rn(400,MAP-400),y:rn(400,MAP-400)};
 }
 
+// Gravitational acceleration magnitude at a world point (stars+planets only)
+function gravAccAt(x,y){
+  let ax=0,ay=0;
+  const Geff=G*CONFIG.gravMult;
+  for(const b of S.bodies){
+    if(b.type!=='star'&&b.type!=='planet') continue;
+    const dx=b.x-x, dy=b.y-y, r2=dx*dx+dy*dy;
+    if(r2<400) continue;
+    const inv=1/Math.sqrt(r2);
+    const f=Geff*b.mass*inv*inv;
+    ax+=f*dx*inv; ay+=f*dy*inv;
+  }
+  return Math.hypot(ax,ay);
+}
+
+// Risk multiplier for an objective at (x,y) — combines grav field, distance, asteroid density
+function riskMult(x,y){
+  const grav=gravAccAt(x,y);
+  const d=S.ship ? dist(S.ship.x,S.ship.y,x,y) : 0;
+  const nearAst=S.bodies.filter(b=>b.type==='asteroid'&&dist(x,y,b.x,b.y)<1500).length;
+  const g=clamp(grav/20,0,2.0);
+  const dFac=clamp(d/7000,0,1.0);
+  const aFac=clamp(nearAst*0.07,0,0.5);
+  return clamp(1.0+g+dFac+aFac,1.0,3.8);
+}
+
+function riskLabel(m){
+  if(m>=2.8) return ' ⚡DANGER';
+  if(m>=2.0) return ' ⚡HIGH RISK';
+  if(m>=1.5) return ' ⚡RISK';
+  return '';
+}
+
 function genObjectives(planetIdxs,asteroidIdxs){
   S.objectives=[];
   const tier=Math.min(4,1+Math.floor(S.runCount/2));
 
   const sp=safePos();
-  S.objectives.push({type:'reach',x:sp.x,y:sp.y,radius:DOCK_RADIUS,label:'Reach Station Alpha',complete:false,fuelReward:0,color:'#00ffcc'});
+  const spRisk=riskMult(sp.x,sp.y);
+  S.objectives.push({type:'reach',x:sp.x,y:sp.y,radius:DOCK_RADIUS,
+    label:`Reach Station Alpha${riskLabel(spRisk)}`,complete:false,
+    fuelReward:Math.round(180*CONFIG.refuelMult*spRisk),color:'#00ffcc'});
 
   if(tier>=2){
     if(nr()>0.5&&asteroidIdxs.length>0){
       const ai=asteroidIdxs[ri(0,asteroidIdxs.length)];
-      S.bodies[ai].isMining=true;S.bodies[ai].vx=rn(-35,35);S.bodies[ai].vy=rn(-35,35);
-      S.objectives.push({type:'mine',targetIdx:ai,label:'Mine Asteroid B-7 (3s)',complete:false,fuelReward:Math.round(300*CONFIG.refuelMult),color:'#ffaa00',progress:0});
+      const ab=S.bodies[ai];
+      ab.isMining=true; ab.vx=rn(-35,35); ab.vy=rn(-35,35);
+      const mRisk=riskMult(ab.x,ab.y);
+      S.objectives.push({type:'mine',targetIdx:ai,
+        label:`Mine Asteroid B-7 (3s)${riskLabel(mRisk)}`,complete:false,
+        fuelReward:Math.round(300*CONFIG.refuelMult*mRisk),color:'#ffaa00',progress:0});
     } else {
       const cp=safePos();
-      S.objectives.push({type:'collect',x:cp.x,y:cp.y,radius:DOCK_RADIUS,label:'Collect Resource Pod',complete:false,fuelReward:Math.round(200*CONFIG.refuelMult),color:'#ffff44'});
+      const cRisk=riskMult(cp.x,cp.y);
+      S.objectives.push({type:'collect',x:cp.x,y:cp.y,radius:DOCK_RADIUS,
+        label:`Collect Resource Pod${riskLabel(cRisk)}`,complete:false,
+        fuelReward:Math.round(200*CONFIG.refuelMult*cRisk),color:'#ffff44'});
     }
   }
   if(tier>=3&&nr()>0.35){
     if(nr()>0.5&&planetIdxs.length>=2){
       const n=Math.min(2,planetIdxs.length);
       const tgts=[...planetIdxs].sort(()=>nr()-0.5).slice(0,n);
-      S.objectives.push({type:'slingshot',targets:tgts,completed:new Set(),label:`Slingshot ${n} planet${n>1?'s':''}`,complete:false,fuelReward:Math.round(400*CONFIG.refuelMult),color:'#ff88ff'});
+      const avgRisk=tgts.reduce((s,i)=>s+riskMult(S.bodies[i].x,S.bodies[i].y),0)/tgts.length;
+      S.objectives.push({type:'slingshot',targets:tgts,completed:new Set(),
+        label:`Slingshot ${n} planet${n>1?'s':''}${riskLabel(avgRisk)}`,complete:false,
+        fuelReward:Math.round(400*CONFIG.refuelMult*avgRisk),color:'#ff88ff'});
     } else if(planetIdxs.length>0){
       const pi=planetIdxs[ri(0,planetIdxs.length)];
-      S.objectives.push({type:'orbit',targetIdx:pi,label:'Establish orbit (5s)',complete:false,fuelReward:Math.round(350*CONFIG.refuelMult),color:'#88ffff',timer:0,required:5});
+      const pRisk=riskMult(S.bodies[pi].x,S.bodies[pi].y);
+      S.objectives.push({type:'orbit',targetIdx:pi,
+        label:`Establish orbit (5s)${riskLabel(pRisk)}`,complete:false,
+        fuelReward:Math.round(350*CONFIG.refuelMult*pRisk),color:'#88ffff',timer:0,required:5});
     }
   }
   if(tier>=4&&nr()>0.5){
     const fp=safePos();
-    S.objectives.push({type:'reach',x:fp.x,y:fp.y,radius:DOCK_RADIUS,label:'Reach Station Beta',complete:false,fuelReward:0,color:'#ff8844'});
+    const fpRisk=riskMult(fp.x,fp.y);
+    S.objectives.push({type:'reach',x:fp.x,y:fp.y,radius:DOCK_RADIUS,
+      label:`Reach Station Beta${riskLabel(fpRisk)}`,complete:false,
+      fuelReward:Math.round(180*CONFIG.refuelMult*fpRisk),color:'#ff8844'});
   }
 }
 
@@ -637,7 +700,13 @@ function updatePhysics(dt){
     sh.vy-=Math.cos(sh.angle)*thr*dt;
     sh.fuel=Math.max(0,sh.fuel-(boosting?FUEL_BOOST:FUEL_RATE)*Math.abs(tAmt)*dt);
     sh.thrusting=true; sh.thrustDir=tAmt>0?1:-1;
+    if(boosting&&tAmt>0) S.boostTrail.push({x:sh.x,y:sh.y,age:0});
   }
+  // Age and cull boost trail
+  for(const pt of S.boostTrail) pt.age+=dt;
+  if(S.boostTrail.length>80) S.boostTrail.splice(0,S.boostTrail.length-80);
+  for(let i=S.boostTrail.length-1;i>=0;i--)
+    if(S.boostTrail[i].age>0.55) S.boostTrail.splice(i,1);
 
   if(sh.fuel<=0){
     sh.zeroFuelTimer+=dt;
@@ -830,7 +899,7 @@ function completObj(obj){
   obj.complete=true; S.objectivesDone++;
   if(obj.fuelReward>0){
     S.ship.fuel=Math.min(CONFIG.fuelMax,S.ship.fuel+obj.fuelReward);
-    S.fuelPopups.push({amount:obj.fuelReward,alpha:1.0,dy:0});
+    S.fuelPopups.push({amount:obj.fuelReward,alpha:1.0,dy:0,wx:S.ship.x,wy:S.ship.y});
   }
   playChime();
 }
@@ -866,7 +935,7 @@ function updateDocking(dt){
     S.ship.fuel=d.fuelTarget;
     d.obj.complete=true; S.objectivesDone++;
     if(d.fuelTarget>d.fuelStart)
-      S.fuelPopups.push({amount:Math.round(d.fuelTarget-d.fuelStart),alpha:1.0,dy:0});
+      S.fuelPopups.push({amount:Math.round(d.fuelTarget-d.fuelStart),alpha:1.0,dy:0,wx:S.ship.x,wy:S.ship.y});
     playChime();
     S.docking=null;
   }
@@ -880,31 +949,42 @@ function appendObjectives(){
   const asteroidIdxs=S.bodies.map((b,i)=>b.type==='asteroid'&&!b.isMining?i:-1).filter(i=>i>=0);
 
   const sp=safePos();
+  const spRisk=riskMult(sp.x,sp.y);
   S.objectives.push({type:'reach',x:sp.x,y:sp.y,radius:DOCK_RADIUS,
-    label:`Reach Station ${S.wave}`,complete:false,fuelReward:Math.round(150*CONFIG.refuelMult),color:'#00ffcc'});
+    label:`Reach Station ${S.wave}${riskLabel(spRisk)}`,complete:false,
+    fuelReward:Math.round(180*CONFIG.refuelMult*spRisk),color:'#00ffcc'});
 
   if(tier>=2){
     if(asteroidIdxs.length>0&&nr()>0.4){
       const ai=asteroidIdxs[ri(0,asteroidIdxs.length)];
-      S.bodies[ai].isMining=true;S.bodies[ai].vx=rn(-35,35);S.bodies[ai].vy=rn(-35,35);
-      S.objectives.push({type:'mine',targetIdx:ai,label:'Mine Asteroid (3s)',
-        complete:false,fuelReward:Math.round(300*CONFIG.refuelMult),color:'#ffaa00',progress:0});
+      const ab=S.bodies[ai];
+      ab.isMining=true; ab.vx=rn(-35,35); ab.vy=rn(-35,35);
+      const mRisk=riskMult(ab.x,ab.y);
+      S.objectives.push({type:'mine',targetIdx:ai,
+        label:`Mine Asteroid (3s)${riskLabel(mRisk)}`,complete:false,
+        fuelReward:Math.round(300*CONFIG.refuelMult*mRisk),color:'#ffaa00',progress:0});
     } else if(nr()>0.4){
       const cp=safePos();
-      S.objectives.push({type:'collect',x:cp.x,y:cp.y,radius:DOCK_RADIUS,label:'Collect Resource Pod',
-        complete:false,fuelReward:Math.round(200*CONFIG.refuelMult),color:'#ffff44'});
+      const cRisk=riskMult(cp.x,cp.y);
+      S.objectives.push({type:'collect',x:cp.x,y:cp.y,radius:DOCK_RADIUS,
+        label:`Collect Resource Pod${riskLabel(cRisk)}`,complete:false,
+        fuelReward:Math.round(200*CONFIG.refuelMult*cRisk),color:'#ffff44'});
     }
   }
   if(tier>=3&&nr()>0.35){
     if(nr()>0.5&&planetIdxs.length>=2){
       const n=Math.min(2,planetIdxs.length);
       const tgts=[...planetIdxs].sort(()=>nr()-0.5).slice(0,n);
+      const avgRisk=tgts.reduce((s,i)=>s+riskMult(S.bodies[i].x,S.bodies[i].y),0)/tgts.length;
       S.objectives.push({type:'slingshot',targets:tgts,completed:new Set(),
-        label:`Slingshot ${n} planet${n>1?'s':''}`,complete:false,fuelReward:Math.round(400*CONFIG.refuelMult),color:'#ff88ff'});
+        label:`Slingshot ${n} planet${n>1?'s':''}${riskLabel(avgRisk)}`,complete:false,
+        fuelReward:Math.round(400*CONFIG.refuelMult*avgRisk),color:'#ff88ff'});
     } else if(planetIdxs.length>0){
       const pi=planetIdxs[ri(0,planetIdxs.length)];
-      S.objectives.push({type:'orbit',targetIdx:pi,label:'Establish orbit (5s)',
-        complete:false,fuelReward:Math.round(350*CONFIG.refuelMult),color:'#88ffff',timer:0,required:5});
+      const pRisk=riskMult(S.bodies[pi].x,S.bodies[pi].y);
+      S.objectives.push({type:'orbit',targetIdx:pi,
+        label:`Establish orbit (5s)${riskLabel(pRisk)}`,complete:false,
+        fuelReward:Math.round(350*CONFIG.refuelMult*pRisk),color:'#88ffff',timer:0,required:5});
     }
   }
 }
@@ -1220,6 +1300,21 @@ function renderObjMarkers(){
         ctx.stroke();
       }
     }
+  }
+}
+
+function renderBoostTrail(){
+  if(!S.boostTrail.length) return;
+  const LIFE=0.55;
+  for(const pt of S.boostTrail){
+    const frac=1-pt.age/LIFE;
+    const r=frac*7;
+    const gr=ctx.createRadialGradient(pt.x,pt.y,0,pt.x,pt.y,r);
+    gr.addColorStop(0,`rgba(255,100,20,${frac*0.85})`);
+    gr.addColorStop(0.5,`rgba(255,40,0,${frac*0.45})`);
+    gr.addColorStop(1,'rgba(200,0,0,0)');
+    ctx.fillStyle=gr;
+    ctx.beginPath();ctx.arc(pt.x,pt.y,r,0,Math.PI*2);ctx.fill();
   }
 }
 
@@ -1577,12 +1672,19 @@ function renderHUD(){
     ctx.textAlign='left';
   }
 
-  // Fuel bonus popups
+  // Fuel bonus popups — large floating text at ship position
+  ctx.textAlign='center';
   for(const p of S.fuelPopups){
-    ctx.fillStyle=`rgba(68,255,170,${p.alpha})`;
-    ctx.font='bold '+fnt(28);ctx.textAlign='left';
-    ctx.fillText(`+${p.amount} FUEL`,fx,fy-12-p.dy);
+    const sx=p.wx!=null ? w2s(p.wx,p.wy).x : fx+fw/2;
+    const sy=p.wx!=null ? w2s(p.wx,p.wy).y-p.dy*2.5-50 : fy-12-p.dy;
+    ctx.globalAlpha=p.alpha;
+    ctx.shadowColor='rgba(60,255,150,0.9)'; ctx.shadowBlur=16;
+    ctx.fillStyle='#55ffbb';
+    ctx.font='bold '+fnt(38);
+    ctx.fillText(`+${p.amount} FUEL`,sx,sy);
+    ctx.shadowBlur=0;
   }
+  ctx.globalAlpha=1; ctx.textAlign='left';
 
   // Low-fuel screen pulse (only below 3%, synced to fast blink)
   if(isCritical&&blinkFast){
@@ -2006,6 +2108,7 @@ function render(){
   if(S.cheat) renderGravContours();
   renderBodies();renderComets();
   renderObjMarkers();renderLasers();
+  renderBoostTrail();
   if(S.ship.alive) renderShip();
   if(S.cheat&&S.ship.alive) renderGravVector();
   ctx.restore();
@@ -2070,7 +2173,7 @@ window.addEventListener('keydown',e=>{
       if(S.phase==='playing'&&S.extraFuelReady&&S.ship.alive){
         const bonus=Math.round(CONFIG.fuelMax*0.30);
         S.ship.fuel=Math.min(CONFIG.fuelMax,S.ship.fuel+bonus);
-        S.fuelPopups.push({amount:bonus,alpha:1.0,dy:0});
+        S.fuelPopups.push({amount:bonus,alpha:1.0,dy:0,wx:S.ship.x,wy:S.ship.y});
         S.extraFuelReady=false;
         playChime();
       }
