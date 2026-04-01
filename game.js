@@ -743,6 +743,7 @@ function updatePhysics(dt){
 }
 
 function killShip(cause){
+  S.cam.x=S.ship.x; S.cam.y=S.ship.y; // snap so explosion is centred on screen
   S.ship.alive=false; S.phase='dead';
   S.death={cause,message:deathMsg(cause)};
   // Explosion on physical impacts (not fuel drain or out-of-bounds)
@@ -1539,7 +1540,7 @@ function renderLasers(){
 // Spheres of influence — shown in cheat mode as dotted circles
 // Radius where body gravity = SOI_ACCEL (10% of max thrust)
 function renderGravContours(){
-  if(!CONFIG.gravContours||!S.cheat) return;
+  if(!CONFIG.gravContours) return;
 
   const cw=canvas.width, ch=canvas.height;
   const hw=cw/2/S.cam.zoom, hh=ch/2/S.cam.zoom;
@@ -1951,25 +1952,26 @@ function renderMenu(){
 
 function renderDead(){
   const cw=canvas.width,ch=canvas.height;
-  ctx.fillStyle='rgba(8,0,0,0.58)';ctx.fillRect(0,0,cw,ch);
+  // Light vignette only — keep explosion visible through the overlay
+  ctx.fillStyle='rgba(4,0,0,0.25)';ctx.fillRect(0,0,cw,ch);
   ctx.textAlign='center';
 
-  ctx.fillStyle='#ff2244';ctx.font='bold 120px "Orbitron", monospace';
+  ctx.fillStyle='rgba(255,34,68,0.70)';ctx.font='bold 120px "Orbitron", monospace';
   ctx.fillText('SHIP  DESTROYED',cw/2,ch/2-110);
 
   const causeLabels={star:'struck a star',planet:'planetary collision',moon:'moon impact',
     asteroid:'asteroid strike',comet:'comet impact',fuel:'fuel exhausted',oob:'lost in the void'};
-  ctx.fillStyle='#ffaa44';ctx.font=fnt(48);
+  ctx.fillStyle='rgba(255,170,68,0.60)';ctx.font=fnt(48);
   ctx.fillText(`cause:  ${causeLabels[S.death.cause]||'unknown forces'}`,cw/2,ch/2-40);
 
-  ctx.fillStyle='#aabbdd';ctx.font=`italic ${fnt(52,false)}`;
+  ctx.fillStyle='rgba(170,187,221,0.55)';ctx.font=`italic ${fnt(52,false)}`;
   ctx.fillText(`"${S.death.message}"`,cw/2,ch/2+30);
 
-  ctx.fillStyle=C_DIM;ctx.font=fnt(38);
+  ctx.fillStyle='rgba(80,100,130,0.50)';ctx.font=fnt(38);
   ctx.fillText(`time: ${S.time.toFixed(1)}s  ·  objectives: ${S.objectivesDone}  ·  wave: ${S.wave}`,cw/2,ch/2+96);
 
   const t=Date.now()/1000;
-  ctx.fillStyle=`rgba(100,180,220,${0.5+0.5*Math.sin(t*2)})`;
+  ctx.fillStyle=`rgba(100,180,220,${0.45+0.45*Math.sin(t*2)})`;
   ctx.font=fnt(46);
   ctx.fillText('ENTER · new mission      ESC · menu',cw/2,ch/2+172);
   ctx.textAlign='left';
@@ -2211,7 +2213,7 @@ function render(){
   renderBgStars();
   renderNebula();
   if(S.cheat) renderSOI();
-  if(S.cheat) renderGravContours();
+  renderGravContours();
   renderBodies();renderComets();
   renderObjMarkers();renderLasers();
   renderBoostTrail();
