@@ -1547,8 +1547,9 @@ function renderGravContours(){
   const wx0=S.cam.x-hw, wy0=S.cam.y-hh;
   const ww=hw*2, wh=hh*2;
 
-  const d=CONFIG.fieldLineDensity;
-  const COLS=Math.round(80*d), ROWS=Math.round(60*d);
+  // Cell size in screen pixels — fieldLineDensity shrinks the step (more cells = finer lines)
+  const STEP_PX=Math.max(4, Math.round(14/CONFIG.fieldLineDensity));
+  const COLS=Math.ceil(cw/STEP_PX), ROWS=Math.ceil(ch/STEP_PX);
   const wStep=ww/COLS, hStep=wh/ROWS;
   const W=COLS+1, H=ROWS+1;
 
@@ -1577,10 +1578,14 @@ function renderGravContours(){
     }
   }
 
-  // Contour levels (grav acceleration), colours, alphas (dim → bright = weak → strong)
-  const LEVELS=[  1,   4,  16,  64, 256];
-  const COLORS=['#0a3050','#0a5088','#0a80bb','#00aad4','#00ddff'];
-  const ALPHAS=[0.35,  0.40,  0.45,  0.55,  0.65];
+  // 8 log-spaced iso-levels spanning interstellar → stellar surface
+  // G=1950, star mass~10000: a = 19.5M/r²
+  //   r≈8000 → a≈0.3,  r≈4400 → a≈1,  r≈2500 → a≈3,  r≈1400 → a≈10
+  //   r≈800  → a≈30,   r≈440  → a≈100, r≈255  → a≈300, r≈140  → a≈1000
+  const LEVELS=[0.3, 1, 3, 10, 30, 100, 300, 1000];
+  const COLORS=['#0a2840','#0a3f6a','#0a5c94','#0a80bb','#00a0cc','#00bcd4','#00d8e8','#80f0ff'];
+  const ALPHAS=[0.30,  0.35,  0.40,  0.45,  0.50,  0.58,  0.65,  0.72];
+  const WIDTHS=[1.0,   1.0,   1.1,   1.2,   1.3,   1.4,   1.5,   1.6]; // px, pre-zoom
 
   ctx.save();
   ctx.lineCap='round'; ctx.lineJoin='round';
@@ -1588,7 +1593,7 @@ function renderGravContours(){
   for(let li=0;li<LEVELS.length;li++){
     const lv=LEVELS[li];
     ctx.strokeStyle=COLORS[li];
-    ctx.lineWidth=1.2/S.cam.zoom;
+    ctx.lineWidth=WIDTHS[li]/S.cam.zoom;
     ctx.globalAlpha=ALPHAS[li];
     ctx.beginPath();
 
@@ -1603,7 +1608,7 @@ function renderGravContours(){
         const eT=b00!==b10, eR=b10!==b11, eB=b01!==b11, eL=b00!==b01;
         if(!eT&&!eR&&!eB&&!eL) continue;
 
-        // Interpolated crossing points for each crossed edge
+        // Interpolated crossing point on each crossed edge
         const pt=eT?{x:x0+wStep*(lv-f00)/(f10-f00),y:y0}:null;
         const pr=eR?{x:x1,y:y0+hStep*(lv-f10)/(f11-f10)}:null;
         const pb=eB?{x:x0+wStep*(lv-f01)/(f11-f01),y:y1}:null;
@@ -1615,11 +1620,11 @@ function renderGravContours(){
           ctx.moveTo(pts[0].x,pts[0].y);
           ctx.lineTo(pts[1].x,pts[1].y);
         } else if(pts.length===4){
-          // Saddle — resolve topology by diagonal pair that is above threshold
-          if(b00&&b11){ // TL+BR above: arc top↔left and right↔bottom
+          // Saddle — resolve topology by diagonal corner pair above threshold
+          if(b00&&b11){
             ctx.moveTo(pt.x,pt.y); ctx.lineTo(pl.x,pl.y);
             ctx.moveTo(pr.x,pr.y); ctx.lineTo(pb.x,pb.y);
-          } else {      // TR+BL above: arc top↔right and bottom↔left
+          } else {
             ctx.moveTo(pt.x,pt.y); ctx.lineTo(pr.x,pr.y);
             ctx.moveTo(pb.x,pb.y); ctx.lineTo(pl.x,pl.y);
           }
