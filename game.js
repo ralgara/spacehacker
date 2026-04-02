@@ -88,6 +88,37 @@ const RISK_PRESETS = [
 ];
 
 // ================================================================
+// PERSISTENCE + SCORING
+// ================================================================
+const PROFILE_KEY='spacepioneer_v1';
+let PROFILE=null;
+
+function loadProfile(){try{return JSON.parse(localStorage.getItem(PROFILE_KEY))||null;}catch(e){return null;}}
+function saveProfile(){localStorage.setItem(PROFILE_KEY,JSON.stringify(PROFILE));}
+
+function initProfile(){
+  PROFILE=loadProfile();
+  if(!PROFILE){
+    const name=(prompt('Enter your pilot name:','Pioneer')||'Pioneer').trim().slice(0,20)||'Pioneer';
+    PROFILE={username:name,careerScore:0,bestScore:0,runs:[]};
+    saveProfile();
+  }
+}
+
+function computeRunScore(){
+  const fuelBonus=Math.round((S.ship.fuel/CONFIG.fuelMax)*200);
+  const base=S.objectivesDone*150+S.wave*50+fuelBonus;
+  const RISK_MULTS=[1,2,3.5,6];
+  let riskMult=1;
+  for(let i=0;i<RISK_PRESETS.length;i++){
+    const [,v]=RISK_PRESETS[i];
+    if(CONFIG.gravMult===v.gravMult&&CONFIG.cometRate===v.cometRate&&
+       CONFIG.fuelMax===v.fuelMax&&CONFIG.refuelMult===v.refuelMult){riskMult=RISK_MULTS[i];break;}
+  }
+  return Math.round(base*riskMult);
+}
+
+// ================================================================
 // UI STATE
 // ================================================================
 const UI = { configOpen: false, configPaused: false };
@@ -454,6 +485,7 @@ function initState() {
     docking:null,
     extraFuelReady:true,
     explosion:null,
+    runScore:0,
     boostTrail:[],
   };
 }
@@ -746,6 +778,14 @@ function killShip(cause){
   S.cam.x=S.ship.x; S.cam.y=S.ship.y; // snap so explosion is centred on screen
   S.ship.alive=false; S.phase='dead';
   S.death={cause,message:deathMsg(cause)};
+  S.runScore=computeRunScore();
+  if(PROFILE){
+    PROFILE.careerScore=(PROFILE.careerScore||0)+S.runScore;
+    if(S.runScore>(PROFILE.bestScore||0)) PROFILE.bestScore=S.runScore;
+    PROFILE.runs=[{score:S.runScore,wave:S.wave,objectives:S.objectivesDone,
+                   cause,ts:Date.now()},...PROFILE.runs].slice(0,20);
+    saveProfile();
+  }
   // Explosion on physical impacts (not fuel drain or out-of-bounds)
   if(cause!=='fuel'&&cause!=='oob'){
     const sh=S.ship;
@@ -1857,7 +1897,7 @@ function renderHUD(){
 
   // ---- Approaching indicator ----
   if(sh.alive){
-    let nearObj=null,nearDist=Infinity,closingRate=0;
+    let nearObj=null,nearDist=Infinity,closingRate=0,nearTx=0,nearTy=0;
     for(const obj of S.objectives){
       if(obj.complete) continue;
       let tx=obj.x,ty=obj.y;
@@ -1869,19 +1909,23 @@ function renderHUD(){
       }
       const d=dist(sh.x,sh.y,tx,ty);
       if(d<nearDist){
-        nearDist=d;nearObj=obj;
+        nearDist=d;nearObj=obj;nearTx=tx;nearTy=ty;
         const dx=(tx-sh.x)/d,dy=(ty-sh.y)/d;
-        closingRate=sh.vx*dx+sh.vy*dy; // positive = closing
+        closingRate=sh.vx*dx+sh.vy*dy;
       }
     }
     if(nearObj&&nearDist<2200&&closingRate>6){
-      const pulse=0.55+0.35*Math.sin(Date.now()/1000*2.8);
       const typeNames={reach:'Station',collect:'Pod',mine:'Asteroid',orbit:'Planet',slingshot:'Planet'};
       const tname=typeNames[nearObj.type]||nearObj.label;
-      ctx.fillStyle=`rgba(80,210,255,${pulse})`;
-      ctx.font='bold '+fnt(24);ctx.textAlign='center';
-      ctx.fillText(`Approaching ${tname}  ·  closing ${closingRate.toFixed(0)} m/s`,cw/2,96);
-      ctx.textAlign='left';
+      // Place overlay at the target's screen position (clamped inside viewport)
+      const sp=w2s(nearTx,nearTy);
+      const ox=clamp(sp.x,90,cw-90);
+      const oy=clamp(sp.y+52,60,ch-60);
+      ctx.globalAlpha=0.50;
+      ctx.fillStyle='#55d4ff';
+      ctx.font='bold '+fnt(22);ctx.textAlign='center';
+      ctx.fillText(`Approaching ${tname}  ·  ${closingRate.toFixed(0)} m/s`,ox,oy);
+      ctx.globalAlpha=1;ctx.textAlign='left';
     }
   }
 
@@ -1931,16 +1975,15 @@ function renderHUD(){
     ctx.textAlign='center';ctx.fillText(`WAVE ${S.wave} COMPLETE`,cw/2,ch/2-60);ctx.textAlign='left';
   }
 
-  // Bottom row: version left, controls centre, zoom right
+  // Bottom two rows — left-aligned, clear of minimap
   const ver = window.GAME_VER || 'dev';
-  ctx.fillStyle=C_DIM;ctx.font=fnt(21);
+  ctx.fillStyle=C_DIM;ctx.font=fnt(20);
   ctx.textAlign='left';
-  ctx.fillText(ver, 22, ch-14);
-  ctx.textAlign='center';
-  ctx.fillText('WASD · SHIFT:boost · SPACE:laser · F:emerg.fuel · G:grav field · -/=:zoom · M:map · Tab:settings · `:cheat · R:restart · ESC:pause', cw/2, ch-14);
+  ctx.fillText('WASD · SHIFT:boost · SPACE:laser · F:emerg.fuel · G:grav field', 22, ch-38);
+  ctx.fillText(`${ver}  ·  -/=:zoom · M:map · Tab:settings · \`:cheat · R:restart · ESC:pause`, 22, ch-16);
   ctx.textAlign='right';
-  ctx.fillText(`×${S.cam.zoom.toFixed(2)}`, cw-16, ch-14);
-  if(CONFIG.showFPS){ctx.fillText(`${_fps} fps`,cw-16,ch-34);}
+  ctx.fillText(`×${S.cam.zoom.toFixed(2)}`, cw-16, ch-16);
+  if(CONFIG.showFPS){ctx.fillText(`${_fps} fps`,cw-16,ch-38);}
   ctx.textAlign='left';
 
   if(S.showMinimap) renderMinimap();
@@ -2054,6 +2097,12 @@ function renderMenu(){
   ctx.fillStyle=C_DIM;ctx.font=fnt(30);
   ctx.fillText('WASD · SHIFT:boost · SPACE:laser · F:emerg.fuel · -/=:zoom · `:cheat',cw/2,ch*0.38+212);
 
+  // Pilot + career stats
+  if(PROFILE){
+    ctx.fillStyle='rgba(0,180,160,0.55)';ctx.font=fnt(28);
+    ctx.fillText(`pilot: ${PROFILE.username}   ·   career: ${PROFILE.careerScore.toLocaleString()}   ·   best: ${PROFILE.bestScore.toLocaleString()}`,cw/2,ch*0.38+256);
+  }
+
   // Version tag (bottom-right)
   const ver = (window.GAME_VER) || 'dev';
   ctx.fillStyle='#223344';ctx.font=fnt(24);
@@ -2082,10 +2131,18 @@ function renderDead(){
   ctx.fillStyle='rgba(80,100,130,0.50)';ctx.font=fnt(38);
   ctx.fillText(`time: ${S.time.toFixed(1)}s  ·  objectives: ${S.objectivesDone}  ·  wave: ${S.wave}`,cw/2,ch/2+96);
 
+  // Score
+  ctx.fillStyle='rgba(0,220,180,0.75)';ctx.font='bold '+fnt(52);
+  ctx.fillText(`SCORE  ${S.runScore.toLocaleString()}`,cw/2,ch/2+155);
+  if(PROFILE){
+    ctx.fillStyle='rgba(80,140,180,0.55)';ctx.font=fnt(30);
+    ctx.fillText(`career  ${PROFILE.careerScore.toLocaleString()}   ·   best  ${PROFILE.bestScore.toLocaleString()}`,cw/2,ch/2+192);
+  }
+
   const t=Date.now()/1000;
   ctx.fillStyle=`rgba(100,180,220,${0.45+0.45*Math.sin(t*2)})`;
   ctx.font=fnt(46);
-  ctx.fillText('ENTER · new mission      ESC · menu',cw/2,ch/2+172);
+  ctx.fillText('ENTER · new mission      ESC · menu',cw/2,ch/2+248);
   ctx.textAlign='left';
 }
 
@@ -2445,6 +2502,7 @@ function loop(ts){
 // INIT
 // ================================================================
 function init(){
+  initProfile();
   initState();
   S.bgStars=[];
   for(let i=0;i<300;i++)
