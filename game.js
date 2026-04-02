@@ -1797,9 +1797,29 @@ function renderHUD(){
     ctx.fillStyle=C_WARN;ctx.font='bold '+fnt(30);
     ctx.fillText(`DRIFTING — ${sLeft}s`,fx,statY);
   } else {
-    const spd=Math.hypot(sh.vx,sh.vy).toFixed(0);
+    const spdMag=Math.hypot(sh.vx,sh.vy);
     ctx.fillStyle=C_VALUE;ctx.font=fnt(27);
-    ctx.fillText(`SPD  ${spd}`,fx,statY);
+    ctx.fillText(`SPD  ${spdMag.toFixed(0)}`,fx,statY);
+    // Prograde indicator — shows velocity direction in ship's reference frame
+    if(spdMag>1){
+      const fwdX=Math.sin(sh.angle),fwdY=-Math.cos(sh.angle);
+      const rtX=Math.cos(sh.angle),rtY=Math.sin(sh.angle);
+      const vnx=sh.vx/spdMag,vny=sh.vy/spdMag;
+      const fwdComp=vnx*fwdX+vny*fwdY; // +1 = nose direction
+      const rtComp =vnx*rtX +vny*rtY;  // +1 = right
+      const pcx=fx+155,pcy=statY-8,pcr=13;
+      ctx.strokeStyle='rgba(0,160,140,0.45)';ctx.lineWidth=1;
+      ctx.beginPath();ctx.arc(pcx,pcy,pcr,0,Math.PI*2);ctx.stroke();
+      // small tick at top = forward
+      ctx.strokeStyle='rgba(0,160,140,0.30)';ctx.lineWidth=1;
+      ctx.beginPath();ctx.moveTo(pcx,pcy-pcr+2);ctx.lineTo(pcx,pcy-pcr+5);ctx.stroke();
+      // velocity direction needle
+      ctx.strokeStyle='#00ffcc';ctx.lineWidth=2;
+      const ex=pcx+rtComp*pcr*0.82,ey=pcy-fwdComp*pcr*0.82;
+      ctx.beginPath();ctx.moveTo(pcx,pcy);ctx.lineTo(ex,ey);ctx.stroke();
+      ctx.fillStyle='#00ffcc';
+      ctx.beginPath();ctx.arc(ex,ey,2.5,0,Math.PI*2);ctx.fill();
+    }
   }
 
   // ---- Cheat HUD: gravity magnitude + bearing ----
@@ -1835,6 +1855,36 @@ function renderHUD(){
     ctx.textAlign='left';
   }
 
+  // ---- Approaching indicator ----
+  if(sh.alive){
+    let nearObj=null,nearDist=Infinity,closingRate=0;
+    for(const obj of S.objectives){
+      if(obj.complete) continue;
+      let tx=obj.x,ty=obj.y;
+      if((obj.type==='mine'||obj.type==='orbit')&&obj.targetIdx>=0&&obj.targetIdx<S.bodies.length)
+        {tx=S.bodies[obj.targetIdx].x;ty=S.bodies[obj.targetIdx].y;}
+      else if(obj.type==='slingshot'){
+        const pi=obj.targets.find(p=>!obj.completed.has(p));
+        if(pi!=null){tx=S.bodies[pi].x;ty=S.bodies[pi].y;}else continue;
+      }
+      const d=dist(sh.x,sh.y,tx,ty);
+      if(d<nearDist){
+        nearDist=d;nearObj=obj;
+        const dx=(tx-sh.x)/d,dy=(ty-sh.y)/d;
+        closingRate=sh.vx*dx+sh.vy*dy; // positive = closing
+      }
+    }
+    if(nearObj&&nearDist<2200&&closingRate>6){
+      const pulse=0.55+0.35*Math.sin(Date.now()/1000*2.8);
+      const typeNames={reach:'Station',collect:'Pod',mine:'Asteroid',orbit:'Planet',slingshot:'Planet'};
+      const tname=typeNames[nearObj.type]||nearObj.label;
+      ctx.fillStyle=`rgba(80,210,255,${pulse})`;
+      ctx.font='bold '+fnt(24);ctx.textAlign='center';
+      ctx.fillText(`Approaching ${tname}  ·  closing ${closingRate.toFixed(0)} m/s`,cw/2,96);
+      ctx.textAlign='left';
+    }
+  }
+
   // ---- Objectives ----
   ctx.font=fnt(30);
   const oy=statY+36+gravHudH;
@@ -1866,8 +1916,7 @@ function renderHUD(){
   // ---- Cheat mode ----
   if(S.cheat){
     ctx.fillStyle=C_WARN;ctx.font='bold '+fnt(30);
-    const gravLabel=CONFIG.gravContours?'grav field ON':'G:grav field';
-    ctx.textAlign='center';ctx.fillText(`⚠  CHEAT MODE  —  trajectory · SOI · grav/accel vectors · ${gravLabel}`,cw/2,28);ctx.textAlign='left';
+    ctx.textAlign='center';ctx.fillText('⚠  CHEAT MODE  —  trajectory · SOI · grav/accel vectors',cw/2,28);ctx.textAlign='left';
   }
 
   // Wave number — top right
@@ -1888,7 +1937,7 @@ function renderHUD(){
   ctx.textAlign='left';
   ctx.fillText(ver, 22, ch-14);
   ctx.textAlign='center';
-  ctx.fillText('WASD · SHIFT:boost · SPACE:laser · F:emerg.fuel · -/=:zoom · M:map · Tab:settings · `:cheat · R:restart · ESC:pause', cw/2, ch-14);
+  ctx.fillText('WASD · SHIFT:boost · SPACE:laser · F:emerg.fuel · G:grav field · -/=:zoom · M:map · Tab:settings · `:cheat · R:restart · ESC:pause', cw/2, ch-14);
   ctx.textAlign='right';
   ctx.fillText(`×${S.cam.zoom.toFixed(2)}`, cw-16, ch-14);
   if(CONFIG.showFPS){ctx.fillText(`${_fps} fps`,cw-16,ch-34);}
@@ -1898,19 +1947,36 @@ function renderHUD(){
 }
 
 function drawArrow(wx,wy,color){
+  // Hide only when very close — 5× ship visual diameter
+  const HIDE_DIST=5*SHIP_R*DRAW_SCALE*2; // ~200 world units
+  const d=dist(S.ship.x,S.ship.y,wx,wy);
+  if(d<HIDE_DIST) return;
+
   const cw=canvas.width,ch=canvas.height,m=42;
   const sp=w2s(wx,wy);
-  if(sp.x>m&&sp.x<cw-m&&sp.y>m&&sp.y<ch-m) return;
-  const ang=Math.atan2(wy-S.cam.y,wx-S.cam.x);
-  const ax=clamp(canvas.width/2+Math.cos(ang)*200,m,cw-m);
-  const ay=clamp(canvas.height/2+Math.sin(ang)*200,m,ch-m);
-  const d=dist(S.ship.x,S.ship.y,wx,wy);
-  ctx.save();ctx.translate(ax,ay);ctx.rotate(ang);
-  ctx.fillStyle=color;ctx.globalAlpha=0.85;
-  ctx.beginPath();ctx.moveTo(18,0);ctx.lineTo(-9,-9);ctx.lineTo(-9,9);ctx.closePath();ctx.fill();
-  ctx.globalAlpha=1;ctx.rotate(-ang);
-  ctx.fillStyle=color;ctx.font=fnt(22);
-  ctx.textAlign='center';ctx.fillText(d.toFixed(0),0,30);ctx.textAlign='left';
+  const onScreen=sp.x>m&&sp.x<cw-m&&sp.y>m&&sp.y<ch-m;
+
+  ctx.save();
+  if(onScreen){
+    // Target is visible — draw a small ring at its screen position with the distance
+    ctx.strokeStyle=color;ctx.lineWidth=1.5;ctx.globalAlpha=0.75;
+    ctx.beginPath();ctx.arc(sp.x,sp.y,16,0,Math.PI*2);ctx.stroke();
+    ctx.globalAlpha=1;
+    ctx.fillStyle=color;ctx.font=fnt(20);ctx.textAlign='center';
+    ctx.fillText(d.toFixed(0),sp.x,sp.y+30);
+    ctx.textAlign='left';
+  } else {
+    // Target off-screen — edge arrow
+    const ang=Math.atan2(wy-S.cam.y,wx-S.cam.x);
+    const ax=clamp(cw/2+Math.cos(ang)*200,m,cw-m);
+    const ay=clamp(ch/2+Math.sin(ang)*200,m,ch-m);
+    ctx.translate(ax,ay);ctx.rotate(ang);
+    ctx.fillStyle=color;ctx.globalAlpha=0.85;
+    ctx.beginPath();ctx.moveTo(18,0);ctx.lineTo(-9,-9);ctx.lineTo(-9,9);ctx.closePath();ctx.fill();
+    ctx.globalAlpha=1;ctx.rotate(-ang);
+    ctx.fillStyle=color;ctx.font=fnt(22);
+    ctx.textAlign='center';ctx.fillText(d.toFixed(0),0,30);ctx.textAlign='left';
+  }
   ctx.restore();
 }
 
@@ -2317,7 +2383,7 @@ window.addEventListener('keydown',e=>{
       if(S.phase==='playing') S.cheat=!S.cheat;
       break;
     case 'KeyG':
-      if(S.phase==='playing'&&S.cheat) CONFIG.gravContours=!CONFIG.gravContours;
+      if(S.phase==='playing') CONFIG.gravContours=!CONFIG.gravContours;
       break;
     case 'Minus':
       S.cam.zoom=Math.max(ZOOM_MIN,+(S.cam.zoom-ZOOM_STEP).toFixed(2));
