@@ -5,9 +5,9 @@
 // ================================================================
 const canvas = document.getElementById('c');
 const ctx    = canvas.getContext('2d');
-function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; genScreenStars(); }
+function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
 resize();
-window.addEventListener('resize', resize);
+window.addEventListener('resize', ()=>{ resize(); genScreenStars(); });
 
 // ================================================================
 // CONSTANTS
