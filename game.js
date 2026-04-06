@@ -574,7 +574,7 @@ function initState() {
     laserFired:false,
     closestApproachFrac:Infinity,
     achievements:[],
-    narText:'',narTimer:0,narLaserTimer:0,
+    narText:'',narTimer:0,narLaserTimer:0,narKey:'',
   };
 }
 
@@ -887,8 +887,6 @@ function updatePhysics(dt){
 function updateNarrative(dt){
   if(S.narLaserTimer>0) S.narLaserTimer-=dt;
   S.narTimer-=dt;
-  if(S.narTimer>0) return;
-  S.narTimer=0.75+Math.random()*0.25;
 
   const sh=S.ship;
   const fp=sh.fuel/CONFIG.fuelMax;
@@ -899,7 +897,6 @@ function updateNarrative(dt){
   } else if(S.nearEdge){
     key='edge';
   } else {
-    // Find nearest incomplete objective and closing rate
     let nearObj=null, nearDist=Infinity, closingRate=0;
     for(const obj of S.objectives){
       if(obj.complete) continue;
@@ -935,8 +932,22 @@ function updateNarrative(dt){
     }
   }
 
-  const pool=_NAR[key]||_NAR.coast;
-  S.narText=pool[Math.floor(Math.random()*pool.length)];
+  // Urgent states (approach, danger) refresh every ~3s; stable cruise holds 9-13s
+  const urgent=key==='fuel_crit'||key==='edge'||key.startsWith('approach_')||key==='grav_high';
+  const interval=urgent ? 2.5+Math.random() : 9.0+Math.random()*4.0;
+
+  if(key!==S.narKey){
+    // Situation changed — update immediately, reset timer
+    S.narKey=key;
+    S.narTimer=interval;
+    const pool=_NAR[key]||_NAR.coast;
+    S.narText=pool[Math.floor(Math.random()*pool.length)];
+  } else if(S.narTimer<=0){
+    // Same situation, interval elapsed — rotate to a new phrase
+    S.narTimer=interval;
+    const pool=_NAR[key]||_NAR.coast;
+    S.narText=pool[Math.floor(Math.random()*pool.length)];
+  }
 }
 
 function killShip(cause){
