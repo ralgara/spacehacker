@@ -213,6 +213,25 @@ const _URGENT_VERBS=['Urgent: reach','Emergency extraction:','Distress call:','P
 const _STATION_TYPES=['Station','Outpost','Relay','Haven','Platform','Depot','Beacon'];
 const _CARGO=['medical','reactor','personnel','ration','survey','comms'];
 
+// Real-time narrative phrase pools
+const _NAR={
+  fuel_crit:['Fuel critical — running on vapour.','Reserves near zero. Desperate measures.','Last drops. Every burn counts now.'],
+  fuel_low: ['Conserving fuel — threading gravity.','Low propellant. Timing the burns carefully.','Reserves thin. Plotting minimal trajectory.'],
+  edge:     ['Drifting toward the void — correcting.','Edge of mapped space. Pulling back in.','Warning: charted space boundary.'],
+  approach_reach:  ['Final approach to station — reducing velocity.','Docking vector locked. Slowing down.','Station in range — approach sequence active.'],
+  approach_collect:['Closing on pod — matching velocity.','Recovery intercept in progress.','Pod acquisition approach underway.'],
+  approach_mine:   ['Closing on asteroid — bleeding off speed.','Target rock ahead — matching its drift.','Acquisition approach to mining target.'],
+  approach_orbit:  ['Curving toward orbital insertion.','Approach phase — matching orbital speed.','Gravity capture approach underway.'],
+  approach_sling:  ['Entering gravitational corridor.','Threading the slingshot arc.','Gravity assist approach — hold the line.'],
+  grav_high:['Deep in gravity well — managing trajectory.','Strong field — slingshot forming.','Gravity dominant. Minimal burn.','Riding the well. Watching the arc.'],
+  mining:   ['Drilling sequence active — holding position.','Surface extraction underway.','Mining in progress — steady approach.'],
+  orbit:    ['Station-keeping — holding orbital speed.','Orbital insertion hold — arc maintained.','Circling at altitude — watch the burn.'],
+  laser:    ['Obstacle cleared.','Debris neutralized. Path open.','Target destroyed. Continuing.'],
+  boost:    ['Full boost — burning reserves.','Maximum thrust engaged.','Emergency acceleration.'],
+  thrust:   ['Engines firing — adjusting trajectory.','Burn in progress.','Correction underway.'],
+  coast:    ['Coasting on ballistic arc.','Gravity will do the work.','Systems nominal. Trajectory stable.','Free-fall toward objective.','Patience — conserving fuel.'],
+};
+
 // ================================================================
 // SEEDABLE RNG
 // ================================================================
@@ -513,6 +532,7 @@ function initState() {
     laserFired:false,
     closestApproachFrac:Infinity,
     achievements:[],
+    narText:'',narTimer:0,narLaserTimer:0,
   };
 }
 
@@ -819,6 +839,64 @@ function updatePhysics(dt){
     if(dist(sh.x,sh.y,c.x,c.y)<c.radius+SHIP_R){killShip('comet');return;}
 }
 
+// ================================================================
+// NARRATIVE
+// ================================================================
+function updateNarrative(dt){
+  if(S.narLaserTimer>0) S.narLaserTimer-=dt;
+  S.narTimer-=dt;
+  if(S.narTimer>0) return;
+  S.narTimer=0.75+Math.random()*0.25;
+
+  const sh=S.ship;
+  const fp=sh.fuel/CONFIG.fuelMax;
+  let key='coast';
+
+  if(fp<0.04){
+    key='fuel_crit';
+  } else if(S.nearEdge){
+    key='edge';
+  } else {
+    // Find nearest incomplete objective and closing rate
+    let nearObj=null, nearDist=Infinity, closingRate=0;
+    for(const obj of S.objectives){
+      if(obj.complete) continue;
+      let tx=obj.x??0, ty=obj.y??0;
+      if((obj.type==='mine'||obj.type==='orbit')&&obj.targetIdx>=0&&obj.targetIdx<S.bodies.length)
+        {tx=S.bodies[obj.targetIdx].x; ty=S.bodies[obj.targetIdx].y;}
+      else if(obj.type==='slingshot'){
+        const pi=obj.targets.find(p=>!obj.completed.has(p));
+        if(pi!=null){tx=S.bodies[pi].x; ty=S.bodies[pi].y;}
+      }
+      const d=dist(sh.x,sh.y,tx,ty);
+      if(d<nearDist){
+        nearDist=d; nearObj=obj;
+        const ddx=(tx-sh.x)/d, ddy=(ty-sh.y)/d;
+        closingRate=sh.vx*ddx+sh.vy*ddy;
+      }
+    }
+    if(nearObj&&nearDist<2200&&closingRate>6){
+      const approachKey='approach_'+nearObj.type;
+      key=_NAR[approachKey]?approachKey:'approach_reach';
+    } else if(gravAccAt(sh.x,sh.y)>40){
+      key='grav_high';
+    } else {
+      const mineActive=S.objectives.find(o=>o.type==='mine'&&!o.complete&&o.progress>0);
+      const orbitActive=S.objectives.find(o=>o.type==='orbit'&&!o.complete&&o.timer>0);
+      if(mineActive)                              key='mining';
+      else if(orbitActive)                        key='orbit';
+      else if(S.narLaserTimer>0)                 {key='laser'; S.narLaserTimer=0;}
+      else if(keys.ShiftLeft||keys.ShiftRight)   key='boost';
+      else if(keys.KeyW||keys.ArrowUp)            key='thrust';
+      else if(fp<0.20)                            key='fuel_low';
+      else                                        key='coast';
+    }
+  }
+
+  const pool=_NAR[key]||_NAR.coast;
+  S.narText=pool[Math.floor(Math.random()*pool.length)];
+}
+
 function killShip(cause){
   S.cam.x=S.ship.x; S.cam.y=S.ship.y; // snap so explosion is centred on screen
   S.ship.alive=false; S.phase='dead';
@@ -879,7 +957,7 @@ function fireLaser(){
   const sh=S.ship;
   if(sh.laserCooldown>0||sh.fuel<LASER_FUEL||!sh.alive) return;
   sh.fuel-=LASER_FUEL; sh.laserCooldown=LASER_COOL;
-  S.laserFired=true;
+  S.laserFired=true; S.narLaserTimer=3;
 
   const dx=Math.sin(sh.angle),dy=-Math.cos(sh.angle);
   const ox=sh.x+dx*SHIP_R*2,oy=sh.y+dy*SHIP_R*2;
@@ -2029,9 +2107,13 @@ function renderHUD(){
     ctx.textAlign='center';ctx.fillText('⚠  CHEAT MODE  —  trajectory · SOI · grav/accel vectors',cw/2,28);ctx.textAlign='left';
   }
 
-  // Wave number — top right
-  ctx.fillStyle=C_DIM;ctx.font=fnt(26);
-  ctx.textAlign='right';ctx.fillText(`WAVE ${S.wave}`,cw-16,38);ctx.textAlign='left';
+  // Wave + live score — top right block
+  ctx.textAlign='right';
+  ctx.fillStyle='rgba(0,180,160,0.55)';ctx.font='bold '+fnt(28);
+  ctx.fillText(`WAVE  ${S.wave}`,cw-16,36);
+  ctx.fillStyle='rgba(60,140,200,0.50)';ctx.font=fnt(24);
+  ctx.fillText(`SCORE  ${computeRunScore().toLocaleString()}`,cw-16,62);
+  ctx.textAlign='left';
 
   // Wave-complete banner
   if(S.waveBanner){
@@ -2039,6 +2121,15 @@ function renderHUD(){
     ctx.fillStyle=`rgba(0,255,160,${fade})`;
     ctx.font='bold '+fnt(64);
     ctx.textAlign='center';ctx.fillText(`WAVE ${S.wave} COMPLETE`,cw/2,ch/2-60);ctx.textAlign='left';
+  }
+
+  // Narrative line — italic, right-aligned, above controls
+  if(S.narText){
+    ctx.fillStyle='rgba(100,170,210,0.40)';
+    ctx.font=`italic ${fnt(21,false)}`;
+    ctx.textAlign='right';
+    ctx.fillText(S.narText,cw-16,ch-62);
+    ctx.textAlign='left';
   }
 
   // Bottom two rows — left-aligned, clear of minimap
@@ -2557,6 +2648,8 @@ function startRun(){
   if(S.phase==='dead') S.runCount=(S.runCount||0)+1;
   S.phase='playing';S.cheat=false;S.showMinimap=true;
   S.extraFuelReady=(S.runCount%2===0);
+  if(!document.fullscreenElement)
+    document.documentElement.requestFullscreen().catch(()=>{});
   genWorld();
 }
 
@@ -2570,6 +2663,7 @@ function loop(ts){
     updateCam(dt);updateBodies(dt);updateComets(dt);
     updatePhysics(dt);updateLasers(dt);
     updateObjectives(dt);updateDocking(dt);updateFuelPopups(dt);updateEdgeWarning(dt);updateAudio(dt);
+    updateNarrative(dt);
   }
   updateExplosion(dt);
   render();
