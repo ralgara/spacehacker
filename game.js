@@ -198,40 +198,69 @@ function deathMsg(cause) {
 }
 
 // ================================================================
-// SCREEN-SPACE STAR LAYER  (infinite parallax — drawn before camera)
+// PARALLAX STAR LAYERS  (4 depth layers with graded shift velocity)
 // ================================================================
-let SCREEN_STARS = [];
+// Layers ordered far→near. P = camera movement fraction (parallax factor).
+// Far layers: tiny, dim, white. Near layers: larger, brighter, colorful.
+const _BG_LAYERS = [
+  {P:0.02, n:1400, rMin:0.30,rMax:0.55, aMin:0.04,aMax:0.13, tw:0.05,
+   cols:['#ffffff','#eeeeff']},
+  {P:0.07, n:700,  rMin:0.50,rMax:0.95, aMin:0.10,aMax:0.28, tw:0.10,
+   cols:['#ffffff','#ddeeff','#fff0ee','#eeffee']},
+  {P:0.18, n:280,  rMin:0.80,rMax:1.55, aMin:0.22,aMax:0.50, tw:0.16,
+   cols:['#cce8ff','#ffffff','#ffd8cc','#e8ffee','#ffe8cc']},
+  {P:0.38, n:95,   rMin:1.30,rMax:2.40, aMin:0.38,aMax:0.72, tw:0.22,
+   cols:['#cce8ff','#ffeedd','#aaddff','#ffeecc','#ddffcc','#ffffff']},
+];
+const _BG_VSIZE = 8192; // virtual tile size — large enough that tiling isn't noticeable
+let _bgStarLayers = [];  // populated by genScreenStars()
+
 function genScreenStars(){
-  const n=Math.round(2800*CONFIG.starDensity);
-  SCREEN_STARS=[];
-  for(let i=0;i<n;i++){
-    const tier=Math.random();
-    let r,a,col;
-    if(tier<0.70){r=0.4+Math.random()*0.5; a=0.06+Math.random()*0.16; col='#ffffff';}
-    else if(tier<0.92){r=0.8+Math.random()*0.9; a=0.18+Math.random()*0.28;
-      const c=Math.random(); col=c<0.3?'#cce0ff':c<0.55?'#ffeedd':'#ffffff';}
-    else{r=1.3+Math.random()*1.0; a=0.42+Math.random()*0.38;
-      const cols=['#cce8ff','#ffd8cc','#ddffee','#ffeecc','#aaddff'];
-      col=cols[Math.floor(Math.random()*cols.length)];}
-    SCREEN_STARS.push({fx:Math.random(),fy:Math.random(),r,a,col,
-      tp:Math.random()*Math.PI*2, ts:0.15+Math.random()*0.7});
-  }
+  const scale = CONFIG.starDensity;
+  _bgStarLayers = _BG_LAYERS.map(layer => {
+    const stars = [];
+    const count = Math.round(layer.n * scale);
+    for(let i=0;i<count;i++){
+      stars.push({
+        vx:  Math.random()*_BG_VSIZE,
+        vy:  Math.random()*_BG_VSIZE,
+        r:   layer.rMin + Math.random()*(layer.rMax-layer.rMin),
+        a:   layer.aMin + Math.random()*(layer.aMax-layer.aMin),
+        col: layer.cols[Math.floor(Math.random()*layer.cols.length)],
+        tp:  Math.random()*Math.PI*2,
+        ts:  0.06 + Math.random()*layer.tw*4,
+      });
+    }
+    return stars;
+  });
 }
 
 function renderScreenStars(){
-  const t=S.time||Date.now()/1000;
-  const cw=canvas.width,ch=canvas.height;
+  const t  = S.time || Date.now()/1000;
+  const cw = canvas.width, ch = canvas.height;
+  const camX = S.cam ? S.cam.x : 0;
+  const camY = S.cam ? S.cam.y : 0;
   ctx.save();
-  for(const s of SCREEN_STARS){
-    const twinkle=0.82+0.18*Math.sin(t*s.ts+s.tp);
-    ctx.globalAlpha=s.a*twinkle;
-    ctx.fillStyle=s.col;
-    const sx=((s.fx*cw+(S.cam?S.cam.x*0.004:0))%cw+cw)%cw;
-    const sy=((s.fy*ch+(S.cam?S.cam.y*0.004:0))%ch+ch)%ch;
-    if(s.r>1.0){ctx.beginPath();ctx.arc(sx,sy,s.r,0,Math.PI*2);ctx.fill();}
-    else{ctx.fillRect(sx-s.r,sy-s.r,s.r*2,s.r*2);}
+  for(let li=0; li<_BG_LAYERS.length; li++){
+    const layer = _BG_LAYERS[li];
+    const stars = _bgStarLayers[li];
+    if(!stars) continue;
+    // Offset wraps within the virtual tile space
+    const offX = ((camX * layer.P) % _BG_VSIZE + _BG_VSIZE) % _BG_VSIZE;
+    const offY = ((camY * layer.P) % _BG_VSIZE + _BG_VSIZE) % _BG_VSIZE;
+    for(const s of stars){
+      const twinkle = 1 - layer.tw + layer.tw * Math.sin(t*s.ts + s.tp);
+      ctx.globalAlpha = s.a * twinkle;
+      ctx.fillStyle   = s.col;
+      // Map virtual position → screen via modulo tiling
+      const sx = ((s.vx - offX + _BG_VSIZE) % _BG_VSIZE) / _BG_VSIZE * cw;
+      const sy = ((s.vy - offY + _BG_VSIZE) % _BG_VSIZE) / _BG_VSIZE * ch;
+      if(s.r > 1.0){ ctx.beginPath(); ctx.arc(sx, sy, s.r, 0, Math.PI*2); ctx.fill(); }
+      else          { ctx.fillRect(sx-s.r, sy-s.r, s.r*2, s.r*2); }
+    }
   }
-  ctx.globalAlpha=1;ctx.restore();
+  ctx.globalAlpha = 1;
+  ctx.restore();
 }
 
 // ================================================================
