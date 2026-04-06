@@ -56,7 +56,7 @@ const LASER_RANGE= 1400;
 // CONFIG  — runtime-adjustable settings
 // ================================================================
 const CONFIG = {
-  gravMult:   1.0,
+  gravMult:   1.5,
   cometRate:  1.0,
   music:      true,
   showFPS:    false,
@@ -2311,12 +2311,15 @@ function renderHUD(){
     ctx.textAlign='center';ctx.fillText(`WAVE ${S.wave} COMPLETE`,cw/2,ch/2-60);ctx.textAlign='left';
   }
 
-  // Narrative line — italic, right-aligned, above controls
-  if(S.narText){
-    ctx.fillStyle='rgba(100,170,210,0.40)';
-    ctx.font=`italic ${fnt(21,false)}`;
-    ctx.textAlign='right';
-    ctx.fillText(S.narText,cw-16,ch-62);
+  // Narrative — near the ship, in screen space
+  if(S.narText&&sh.alive){
+    const nss=w2s(sh.x,sh.y);
+    const nx=clamp(nss.x,140,cw-140);
+    const ny=clamp(nss.y-72,54,ch-110);
+    ctx.fillStyle='rgba(140,205,245,0.72)';
+    ctx.font=`italic ${fnt(27,false)}`;
+    ctx.textAlign='center';
+    ctx.fillText(S.narText,nx,ny);
     ctx.textAlign='left';
   }
 
@@ -2325,7 +2328,7 @@ function renderHUD(){
   ctx.fillStyle=C_DIM;ctx.font=fnt(20);
   ctx.textAlign='left';
   const gravModeLabel = CONFIG.gravMode==='off'?'off':CONFIG.gravMode;
-  ctx.fillText(`WASD · SHIFT:boost · SPACE:laser · F:emerg.fuel · G:grav[${gravModeLabel}]`, 22, ch-38);
+  ctx.fillText(`WASD · SHIFT:boost · SPACE:laser · F:emerg.fuel · G:grav[${gravModeLabel}] · Z:autozoom`, 22, ch-38);
   ctx.fillText(`${ver}  ·  -/=:zoom · M:map · Tab:settings · \`:cheat · R:restart · ESC:pause`, 22, ch-16);
   ctx.textAlign='right';
   ctx.fillText(`×${S.cam.zoom.toFixed(2)}`, cw-16, ch-16);
@@ -2849,6 +2852,10 @@ window.addEventListener('keydown',e=>{
         const _gm=['off','contours','vectors','colormap'];
         CONFIG.gravMode=_gm[(_gm.indexOf(CONFIG.gravMode)+1)%_gm.length];
       }
+      break;
+    case 'KeyZ':
+      CONFIG.autoZoom=!CONFIG.autoZoom;
+      S.autoZoomLock=0;
       break;
     case 'Minus':
       S.cam.zoom=Math.max(ZOOM_MIN,+(S.cam.zoom-ZOOM_STEP).toFixed(2));
