@@ -1,1 +1,1 @@
-window.GAME_VER = 'v5.10.0';
+window.GAME_VER = 'v5.11.0';
