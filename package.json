@@ -1,0 +1,9 @@
+{
+  "name": "spacehacker",
+  "version": "5.6.0",
+  "description": "Space Pioneer — arcade orbital mechanics game",
+  "private": true,
+  "scripts": {
+    "version": "node -e \"const v=require('./package.json').version;require('fs').writeFileSync('version.js','window.GAME_VER = \\'v'+v+'\\';\\n')\" && git add version.js"
+  }
+}
