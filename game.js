@@ -2389,10 +2389,12 @@ function renderMinimap(){
       ctx.fillStyle=gr;ctx.beginPath();ctx.arc(bx,by,sr*2.8,0,Math.PI*2);ctx.fill();
       ctx.fillStyle='#ffee88';ctx.beginPath();ctx.arc(bx,by,sr,0,Math.PI*2);ctx.fill();
     } else if(b.type==='planet'){
-      const pr=Math.max(1.5,b.radius*sc*2.5);
-      ctx.globalAlpha=0.75;ctx.fillStyle=b.color;
+      const pr=Math.max(2,b.radius*sc*3);
+      ctx.fillStyle=b.color;
       ctx.beginPath();ctx.arc(bx,by,pr,0,Math.PI*2);ctx.fill();
-      ctx.globalAlpha=1;
+      // bright rim for contrast against dark background
+      ctx.strokeStyle='rgba(255,255,255,0.30)';ctx.lineWidth=0.8;
+      ctx.beginPath();ctx.arc(bx,by,pr,0,Math.PI*2);ctx.stroke();
     } else if(b.type==='moon'){
       ctx.fillStyle='rgba(150,150,150,0.40)';ctx.fillRect(bx-0.5,by-0.5,1,1);
     } else if(b.type==='asteroid'){
