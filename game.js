@@ -5,7 +5,7 @@
 // ================================================================
 const canvas = document.getElementById('c');
 const ctx    = canvas.getContext('2d');
-function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
+function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; genScreenStars(); }
 resize();
 window.addEventListener('resize', resize);
 
@@ -34,8 +34,8 @@ const DOCK_RADIUS = 55;         // unified station proximity trigger
 const DOCK_SPEED  = 50;         // max approach speed to complete dock
 const DOCK_ALIGN  = 0.82;       // min |cos θ| ship-heading vs ship→station (≈35° cone)
 
-const ZOOM_MIN   = 0.25;
-const ZOOM_MAX   = 2.0;
+const ZOOM_MIN   = 0.06;
+const ZOOM_MAX   = 4.0;
 const ZOOM_STEP  = 0.12;
 const ZOOM_DEF   = 1.0;
 
@@ -56,18 +56,20 @@ const LASER_RANGE= 1400;
 // CONFIG  — runtime-adjustable settings
 // ================================================================
 const CONFIG = {
-  gravMult:   1.0,   // multiplier on G
-  cometRate:  1.0,   // multiplier on comet frequency (0 = off)
+  gravMult:   1.0,
+  cometRate:  1.0,
   music:      true,
   showFPS:    false,
-  fuelMax:      1000,  // ship fuel capacity
-  refuelMult:   1.0,   // multiplier on all fuel rewards
-  mapSize:      12000, // applied at next genWorld()
-  bodyDensity:  1.0,   // multiplier on planet/asteroid/moon counts
+  fuelMax:      1000,
+  refuelMult:   1.0,
+  mapSize:      12000,
+  bodyDensity:  1.0,
+  autoZoom:     true,
+  starDensity:  1.0,
   // cheats
-  gravContours:    false,
-  gravVectorScale: 1.0,   // length multiplier on the grav arrow
-  fieldLineDensity:1.0,   // multiplier on contour grid resolution (higher = more lines)
+  gravMode:       'off',   // 'off'|'contours'|'vectors'|'colormap'
+  gravVectorScale: 1.0,
+  fieldLineDensity:1.0,
 };
 
 const COMET_PRESETS  = [['Off',0],['Light',0.5],['Normal',1.0],['Heavy',2.5]];
@@ -78,6 +80,8 @@ const MAP_PRESETS     = [['Small',8000],['Med',12000],['Large',20000],['Huge',40
 const DENSITY_PRESETS = [['Sparse',0.5],['Normal',1.0],['Dense',1.5],['Packed',2.0]];
 const GRAV_VECTOR_PRESETS  = [['×½',0.5],['×1',1.0],['×2',2.0],['×4',4.0]];
 const FIELD_DENSITY_PRESETS= [['Sparse',0.5],['Normal',1.0],['Dense',1.5],['Fine',2.0]];
+const GRAV_MODE_PRESETS   = [['Off','off'],['Contours','contours'],['Vectors','vectors'],['Colormap','colormap']];
+const STAR_DENSITY_PRESETS= [['Dim',0.5],['Normal',1.0],['Rich',1.5],['Dense',2.0]];
 
 // Risk-level presets bundle: [label, {gravMult,cometRate,fuelMax,refuelMult}]
 const RISK_PRESETS = [
@@ -191,6 +195,43 @@ const DEATHS = {
 function deathMsg(cause) {
   const pool = DEATHS[cause] || DEATHS.asteroid;
   return pool[Math.floor(Math.random() * pool.length)];
+}
+
+// ================================================================
+// SCREEN-SPACE STAR LAYER  (infinite parallax — drawn before camera)
+// ================================================================
+let SCREEN_STARS = [];
+function genScreenStars(){
+  const n=Math.round(2800*CONFIG.starDensity);
+  SCREEN_STARS=[];
+  for(let i=0;i<n;i++){
+    const tier=Math.random();
+    let r,a,col;
+    if(tier<0.70){r=0.4+Math.random()*0.5; a=0.06+Math.random()*0.16; col='#ffffff';}
+    else if(tier<0.92){r=0.8+Math.random()*0.9; a=0.18+Math.random()*0.28;
+      const c=Math.random(); col=c<0.3?'#cce0ff':c<0.55?'#ffeedd':'#ffffff';}
+    else{r=1.3+Math.random()*1.0; a=0.42+Math.random()*0.38;
+      const cols=['#cce8ff','#ffd8cc','#ddffee','#ffeecc','#aaddff'];
+      col=cols[Math.floor(Math.random()*cols.length)];}
+    SCREEN_STARS.push({fx:Math.random(),fy:Math.random(),r,a,col,
+      tp:Math.random()*Math.PI*2, ts:0.15+Math.random()*0.7});
+  }
+}
+
+function renderScreenStars(){
+  const t=S.time||Date.now()/1000;
+  const cw=canvas.width,ch=canvas.height;
+  ctx.save();
+  for(const s of SCREEN_STARS){
+    const twinkle=0.82+0.18*Math.sin(t*s.ts+s.tp);
+    ctx.globalAlpha=s.a*twinkle;
+    ctx.fillStyle=s.col;
+    const sx=((s.fx*cw+(S.cam?S.cam.x*0.004:0))%cw+cw)%cw;
+    const sy=((s.fy*ch+(S.cam?S.cam.y*0.004:0))%ch+ch)%ch;
+    if(s.r>1.0){ctx.beginPath();ctx.arc(sx,sy,s.r,0,Math.PI*2);ctx.fill();}
+    else{ctx.fillRect(sx-s.r,sy-s.r,s.r*2,s.r*2);}
+  }
+  ctx.globalAlpha=1;ctx.restore();
 }
 
 // ================================================================
@@ -528,6 +569,7 @@ function initState() {
     explosion:null,
     runScore:0,
     boostTrail:[],
+    autoZoomLock:0,
     peakGrav:0,
     laserFired:false,
     closestApproachFrac:Infinity,
@@ -1234,6 +1276,41 @@ function computeTraj(){
 function updateCam(dt){
   S.cam.x=lerp(S.cam.x,S.ship.x,Math.min(1,8*dt));
   S.cam.y=lerp(S.cam.y,S.ship.y,Math.min(1,8*dt));
+
+  if(S.autoZoomLock>0){S.autoZoomLock-=dt; return;}
+  if(!CONFIG.autoZoom||!S.ship.alive) return;
+
+  const sh=S.ship;
+  // Body proximity: 0=far, 1=at body threshold
+  let bodyProx=0;
+  for(const b of S.bodies){
+    if(b.type==='asteroid'||b.type==='moon') continue;
+    const thresh=b.radius*DRAW_SCALE*8;
+    const d=dist(sh.x,sh.y,b.x,b.y)-b.radius*DRAW_SCALE;
+    const prox=clamp(1-d/thresh,0,1);
+    if(prox>bodyProx) bodyProx=prox;
+  }
+
+  // Nearest incomplete objective distance
+  let nearDist=Infinity;
+  for(const obj of S.objectives){
+    if(obj.complete) continue;
+    let tx=obj.x??0,ty=obj.y??0;
+    if((obj.type==='mine'||obj.type==='orbit')&&obj.targetIdx>=0&&obj.targetIdx<S.bodies.length)
+      {tx=S.bodies[obj.targetIdx].x;ty=S.bodies[obj.targetIdx].y;}
+    else if(obj.type==='slingshot'){
+      const pi=obj.targets.find(p=>!obj.completed.has(p));
+      if(pi!=null){tx=S.bodies[pi].x;ty=S.bodies[pi].y;}
+    }
+    const d=dist(sh.x,sh.y,tx,ty);
+    if(d<nearDist) nearDist=d;
+  }
+  const objRemote=clamp((nearDist-2000)/9000,0,1);
+
+  // Base zoom from objective distance; body proximity overrides toward ZOOM_MAX
+  const baseZoom=ZOOM_DEF*(1-objRemote*0.65);
+  const targetZoom=clamp(lerp(baseZoom,ZOOM_MAX*0.75,bodyProx*bodyProx),ZOOM_MIN,ZOOM_MAX);
+  S.cam.zoom=lerp(S.cam.zoom,targetZoom,Math.min(1,0.5*dt));
 }
 function w2s(wx,wy){
   return{x:(wx-S.cam.x)*S.cam.zoom+canvas.width/2,
@@ -1747,7 +1824,7 @@ function renderLasers(){
 // Spheres of influence — shown in cheat mode as dotted circles
 // Radius where body gravity = SOI_ACCEL (10% of max thrust)
 function renderGravContours(){
-  if(!CONFIG.gravContours) return;
+  if(CONFIG.gravMode !== 'contours') return;
 
   const cw=canvas.width, ch=canvas.height;
   const hw=cw/2/S.cam.zoom, hh=ch/2/S.cam.zoom;
@@ -1859,6 +1936,117 @@ function renderSOI(){
     ctx.beginPath();ctx.arc(b.x,b.y,soiR,0,Math.PI*2);ctx.stroke();
   }
   ctx.setLineDash([]);ctx.restore();
+}
+
+// ================================================================
+// GRAVITY VECTOR FIELD
+// ================================================================
+function renderGravVectorField(){
+  if(CONFIG.gravMode!=='vectors') return;
+  const cw=canvas.width,ch=canvas.height;
+  const STEP=52; // screen pixels between arrows
+  const hw=cw/2/S.cam.zoom,hh=ch/2/S.cam.zoom;
+  const wx0=S.cam.x-hw,wy0=S.cam.y-hh;
+  const wStep=STEP/S.cam.zoom;
+  const COLS=Math.ceil(cw/STEP),ROWS=Math.ceil(ch/STEP);
+  const bodies=S.bodies.filter(b=>b.type==='star'||b.type==='planet');
+  if(!bodies.length) return;
+  const Geff=G*CONFIG.gravMult;
+  const logMin=Math.log10(0.3),logRange=Math.log10(1000)-logMin;
+
+  ctx.save();
+  for(let r=0;r<ROWS;r++){
+    const wy=wy0+(r+0.5)*wStep;
+    for(let c=0;c<COLS;c++){
+      const wx=wx0+(c+0.5)*wStep;
+      let ax=0,ay=0;
+      for(const b of bodies){
+        const dx=b.x-wx,dy=b.y-wy,r2=dx*dx+dy*dy;
+        if(r2<400) continue;
+        const inv=1/Math.sqrt(r2);
+        const f=Geff*b.mass*inv*inv;
+        ax+=f*dx*inv; ay+=f*dy*inv;
+      }
+      const mag=Math.hypot(ax,ay);
+      if(mag<0.1) continue;
+      const t=clamp((Math.log10(mag)-logMin)/logRange,0,1);
+      const len=(5+t*(STEP*0.36))/S.cam.zoom;
+      const nx=ax/mag,ny=ay/mag;
+      let rr,gg,bb;
+      if(t<0.33){rr=0;gg=Math.round(t/0.33*200);bb=200;}
+      else if(t<0.66){rr=Math.round((t-0.33)/0.33*200);gg=200;bb=Math.round(200-(t-0.33)/0.33*200);}
+      else{rr=200;gg=Math.round(200-(t-0.66)/0.34*200);bb=0;}
+      const alpha=0.22+t*0.45;
+      ctx.strokeStyle=`rgba(${rr},${gg},${bb},${alpha})`;
+      ctx.fillStyle=`rgba(${rr},${gg},${bb},${alpha})`;
+      ctx.lineWidth=0.9/S.cam.zoom;
+      const ex=wx+nx*len,ey=wy+ny*len;
+      const as=3.5/S.cam.zoom;
+      const ang=Math.atan2(ny,nx);
+      ctx.beginPath();ctx.moveTo(wx,wy);ctx.lineTo(ex,ey);ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(ex,ey);
+      ctx.lineTo(ex-as*Math.cos(ang-0.5),ey-as*Math.sin(ang-0.5));
+      ctx.lineTo(ex-as*Math.cos(ang+0.5),ey-as*Math.sin(ang+0.5));
+      ctx.closePath();ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
+// ================================================================
+// GRAVITY COLOR MAP
+// ================================================================
+let _gcmCanvas=null,_gcmCtx=null;
+
+function renderGravColorMap(){
+  if(CONFIG.gravMode!=='colormap') return;
+  const cw=canvas.width,ch=canvas.height;
+  const SCALE=10;
+  const mw=Math.ceil(cw/SCALE),mh=Math.ceil(ch/SCALE);
+  if(!_gcmCanvas||_gcmCanvas.width!==mw||_gcmCanvas.height!==mh){
+    _gcmCanvas=document.createElement('canvas');
+    _gcmCanvas.width=mw; _gcmCanvas.height=mh;
+    _gcmCtx=_gcmCanvas.getContext('2d');
+  }
+  const imgData=_gcmCtx.createImageData(mw,mh);
+  const data=imgData.data;
+  const hw=cw/2/S.cam.zoom,hh=ch/2/S.cam.zoom;
+  const wx0=S.cam.x-hw,wy0=S.cam.y-hh;
+  const ww=hw*2,wh=hh*2;
+  const bodies=S.bodies.filter(b=>b.type==='star'||b.type==='planet');
+  if(!bodies.length) return;
+  const Geff=G*CONFIG.gravMult;
+  const logMin=Math.log10(0.3),logRange=Math.log10(1000)-logMin;
+  for(let row=0;row<mh;row++){
+    const wy=wy0+(row/mh)*wh;
+    for(let col=0;col<mw;col++){
+      const wx=wx0+(col/mw)*ww;
+      let ax=0,ay=0;
+      for(const b of bodies){
+        const dx=b.x-wx,dy=b.y-wy,r2=dx*dx+dy*dy;
+        if(r2<400) continue;
+        const inv=1/Math.sqrt(r2);
+        const f=Geff*b.mass*inv*inv;
+        ax+=f*dx*inv; ay+=f*dy*inv;
+      }
+      const mag=Math.hypot(ax,ay);
+      const idx=(row*mw+col)*4;
+      if(mag<0.15){data[idx+3]=0;continue;}
+      const t=clamp((Math.log10(mag)-logMin)/logRange,0,1);
+      let rr,gg,bb;
+      if(t<0.33){rr=0;gg=Math.round(t/0.33*200);bb=200;}
+      else if(t<0.66){rr=Math.round((t-0.33)/0.33*200);gg=200;bb=Math.round(200-(t-0.33)/0.33*200);}
+      else{rr=200;gg=Math.round(200-(t-0.66)/0.34*200);bb=0;}
+      data[idx]=rr;data[idx+1]=gg;data[idx+2]=bb;
+      data[idx+3]=Math.round((0.12+t*0.30)*255);
+    }
+  }
+  _gcmCtx.putImageData(imgData,0,0);
+  ctx.save();
+  ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='low';
+  ctx.drawImage(_gcmCanvas,0,0,cw,ch);
+  ctx.restore();
 }
 
 function renderTraj(){
@@ -2136,7 +2324,8 @@ function renderHUD(){
   const ver = window.GAME_VER || 'dev';
   ctx.fillStyle=C_DIM;ctx.font=fnt(20);
   ctx.textAlign='left';
-  ctx.fillText('WASD · SHIFT:boost · SPACE:laser · F:emerg.fuel · G:grav field', 22, ch-38);
+  const gravModeLabel = CONFIG.gravMode==='off'?'off':CONFIG.gravMode;
+  ctx.fillText(`WASD · SHIFT:boost · SPACE:laser · F:emerg.fuel · G:grav[${gravModeLabel}]`, 22, ch-38);
   ctx.fillText(`${ver}  ·  -/=:zoom · M:map · Tab:settings · \`:cheat · R:restart · ESC:pause`, 22, ch-16);
   ctx.textAlign='right';
   ctx.fillText(`×${S.cam.zoom.toFixed(2)}`, cw-16, ch-16);
@@ -2185,15 +2374,35 @@ function renderMinimap(){
   const sc=mm/MAP;
   ctx.fillStyle='rgba(0,0,18,0.75)';ctx.fillRect(mx,my,mm,mm);
   ctx.strokeStyle='#1a3355';ctx.lineWidth=1;ctx.strokeRect(mx,my,mm,mm);
+
+  const now=Date.now()/1000;
+
   for(const b of S.bodies){
-    const bx=mx+b.x*sc,by=my+b.y*sc,br=Math.max(2,b.radius*sc*3);
-    ctx.fillStyle=b.type==='star'?'#ffdd44':b.type==='planet'?b.color:b.type==='moon'?'#888888':'#554433';
-    ctx.beginPath();ctx.arc(bx,by,br,0,Math.PI*2);ctx.fill();
+    const bx=mx+b.x*sc,by=my+b.y*sc;
+    if(b.type==='star'){
+      const sr=Math.max(3,b.radius*sc*4);
+      const gr=ctx.createRadialGradient(bx,by,0,bx,by,sr*2.8);
+      gr.addColorStop(0,'rgba(255,220,100,0.45)');gr.addColorStop(1,'rgba(255,220,100,0)');
+      ctx.fillStyle=gr;ctx.beginPath();ctx.arc(bx,by,sr*2.8,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle='#ffee88';ctx.beginPath();ctx.arc(bx,by,sr,0,Math.PI*2);ctx.fill();
+    } else if(b.type==='planet'){
+      const pr=Math.max(1.5,b.radius*sc*2.5);
+      ctx.globalAlpha=0.75;ctx.fillStyle=b.color;
+      ctx.beginPath();ctx.arc(bx,by,pr,0,Math.PI*2);ctx.fill();
+      ctx.globalAlpha=1;
+    } else if(b.type==='moon'){
+      ctx.fillStyle='rgba(150,150,150,0.40)';ctx.fillRect(bx-0.5,by-0.5,1,1);
+    } else if(b.type==='asteroid'){
+      ctx.fillStyle='rgba(90,70,55,0.30)';ctx.fillRect(bx-0.5,by-0.5,1,1);
+    }
   }
+
   for(const c of S.comets){
-    ctx.fillStyle='#aaddff';
-    ctx.beginPath();ctx.arc(mx+c.x*sc,my+c.y*sc,2,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='rgba(150,215,255,0.55)';
+    ctx.fillRect(mx+c.x*sc-1,my+c.y*sc-1,2,2);
   }
+
+  const pulse=0.55+0.45*Math.sin(now*3.2);
   for(const obj of S.objectives){
     if(obj.complete) continue;
     let ox=obj.x,oy=obj.y;
@@ -2206,10 +2415,16 @@ function renderMinimap(){
       if(pi!=null){ox=S.bodies[pi].x;oy=S.bodies[pi].y;}else continue;
     }
     if(ox==null) continue;
-    ctx.fillStyle=obj.color;ctx.beginPath();ctx.arc(mx+ox*sc,my+oy*sc,4,0,Math.PI*2);ctx.fill();
+    const sx=mx+ox*sc,sy=my+oy*sc;
+    ctx.globalAlpha=pulse;
+    ctx.strokeStyle=obj.color;ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(sx-4,sy);ctx.lineTo(sx+4,sy);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(sx,sy-4);ctx.lineTo(sx,sy+4);ctx.stroke();
+    ctx.beginPath();ctx.arc(sx,sy,3,0,Math.PI*2);ctx.stroke();
+    ctx.globalAlpha=1;
   }
-  // Ship — bright oriented triangle with glow ring
-  const smx=mx+S.ship.x*sc, smy=my+S.ship.y*sc, smr=7;
+
+  const smx=mx+S.ship.x*sc,smy=my+S.ship.y*sc,smr=7;
   ctx.save();ctx.translate(smx,smy);ctx.rotate(S.ship.angle);
   ctx.strokeStyle='rgba(0,255,180,0.55)';ctx.lineWidth=1.5;
   ctx.beginPath();ctx.arc(0,0,smr+4,0,Math.PI*2);ctx.stroke();
@@ -2355,7 +2570,7 @@ function _cfgBtn(label,active,x,y,w,h,action){
 
 function renderConfig(){
   const cw=canvas.width,ch=canvas.height;
-  const pw=500,ph=700,px=(cw-pw)/2,py=Math.max(8,(ch-ph)/2);
+  const pw=500,ph=820,px=(cw-pw)/2,py=Math.max(8,(ch-ph)/2);
   _configBtns=[];
 
   ctx.fillStyle='rgba(4,8,20,0.96)';
@@ -2467,11 +2682,13 @@ function renderConfig(){
   ctx.fillText('CHEATS  (active in cheat mode only — ` key)',cw/2,row+14);
   row+=22;
 
-  // Grav Contours toggle
+  // Grav field mode
   ctx.fillStyle=C_VALUE;ctx.font=fnt(21);ctx.textAlign='left';
   ctx.fillText('GRAV FIELD',lx,row+bh*0.67);
-  _cfgBtn('On', CONFIG.gravContours, lx+labelW,     row,76,bh,()=>{CONFIG.gravContours=true;});
-  _cfgBtn('Off',!CONFIG.gravContours,lx+labelW+84,  row,76,bh,()=>{CONFIG.gravContours=false;});
+  const gmw=76;
+  GRAV_MODE_PRESETS.forEach(([lbl,val],i)=>{
+    _cfgBtn(lbl,CONFIG.gravMode===val,lx+labelW+i*(gmw+gap),row,gmw,bh,()=>{CONFIG.gravMode=val;});
+  });
 
   row+=bh+10;
   // Gravity vector scale
@@ -2491,6 +2708,22 @@ function renderConfig(){
     _cfgBtn(lbl,CONFIG.fieldLineDensity===val,lx+labelW+i*(fdw+gap),row,fdw,bh,()=>{CONFIG.fieldLineDensity=val;});
   });
 
+  row+=bh+10;
+  // Auto-zoom
+  ctx.fillStyle=C_VALUE;ctx.font=fnt(21);ctx.textAlign='left';
+  ctx.fillText('AUTO-ZOOM',lx,row+bh*0.67);
+  _cfgBtn('On', CONFIG.autoZoom, lx+labelW,     row,76,bh,()=>{CONFIG.autoZoom=true;});
+  _cfgBtn('Off',!CONFIG.autoZoom,lx+labelW+84,  row,76,bh,()=>{CONFIG.autoZoom=false;});
+
+  row+=bh+10;
+  // Star density
+  ctx.fillStyle=C_VALUE;ctx.font=fnt(21);ctx.textAlign='left';
+  ctx.fillText('STARS',lx,row+bh*0.67);
+  const sdw=68;
+  STAR_DENSITY_PRESETS.forEach(([lbl,val],i)=>{
+    _cfgBtn(lbl,CONFIG.starDensity===val,lx+labelW+i*(sdw+gap),row,sdw,bh,()=>{CONFIG.starDensity=val;genScreenStars();});
+  });
+
   ctx.textAlign='left';
 }
 
@@ -2500,7 +2733,7 @@ function handleConfigClick(mx,my){
     if(mx>=x&&mx<=x+w&&my>=y&&my<=y+h){b.action();return;}
   }
   // Click outside panel closes it
-  const cw=canvas.width,ch=canvas.height,pw=500,ph=700;
+  const cw=canvas.width,ch=canvas.height,pw=500,ph=820;
   const px=(cw-pw)/2,py=Math.max(8,(ch-ph)/2);
   if(mx<px||mx>px+pw||my<py||my>py+ph){UI.configOpen=false;if(UI.configPaused){S.phase='playing';UI.configPaused=false;}}
 }
@@ -2547,11 +2780,13 @@ function render(){
   ctx.fillStyle='#020818';ctx.fillRect(0,0,canvas.width,canvas.height);
   if(S.phase==='menu'){renderMenu();return;}
 
+  renderScreenStars();
   ctx.save();applyCamera();
   renderBgStars();
   renderNebula();
   if(S.cheat) renderSOI();
   renderGravContours();
+  renderGravVectorField();
   renderBodies();renderComets();
   renderObjMarkers();renderLasers();
   renderBoostTrail();
@@ -2561,6 +2796,7 @@ function render(){
   renderExplosion();
   ctx.restore();
 
+  renderGravColorMap();
   renderVignette();
   if(S.docking) renderDocking();
   if(S.cheat&&S.ship.alive&&S.phase==='playing') renderTraj();
@@ -2609,13 +2845,18 @@ window.addEventListener('keydown',e=>{
       if(S.phase==='playing') S.cheat=!S.cheat;
       break;
     case 'KeyG':
-      if(S.phase==='playing') CONFIG.gravContours=!CONFIG.gravContours;
+      if(S.phase==='playing'){
+        const _gm=['off','contours','vectors','colormap'];
+        CONFIG.gravMode=_gm[(_gm.indexOf(CONFIG.gravMode)+1)%_gm.length];
+      }
       break;
     case 'Minus':
       S.cam.zoom=Math.max(ZOOM_MIN,+(S.cam.zoom-ZOOM_STEP).toFixed(2));
+      S.autoZoomLock=6;
       break;
     case 'Equal':case 'Plus':
       S.cam.zoom=Math.min(ZOOM_MAX,+(S.cam.zoom+ZOOM_STEP).toFixed(2));
+      S.autoZoomLock=6;
       break;
     case 'KeyM':
       S.showMinimap=!S.showMinimap;
@@ -2676,6 +2917,7 @@ function loop(ts){
 function init(){
   initProfile();
   initState();
+  genScreenStars();
   S.bgStars=[];
   for(let i=0;i<300;i++)
     S.bgStars.push({x:Math.random()*MAP,y:Math.random()*MAP,r:Math.random()*0.9+0.3,a:Math.random()*0.5+0.2,phase:Math.random()*Math.PI*2,speed:Math.random()*0.8+0.2,bright:false});
