@@ -106,16 +106,18 @@ function initProfile(){
 }
 
 function computeRunScore(){
-  const fuelBonus=Math.round((S.ship.fuel/CONFIG.fuelMax)*200);
-  const base=S.objectivesDone*150+S.wave*50+fuelBonus;
-  const RISK_MULTS=[1,2,3.5,6];
-  let riskMult=1;
-  for(let i=0;i<RISK_PRESETS.length;i++){
-    const [,v]=RISK_PRESETS[i];
-    if(CONFIG.gravMult===v.gravMult&&CONFIG.cometRate===v.cometRate&&
-       CONFIG.fuelMax===v.fuelMax&&CONFIG.refuelMult===v.refuelMult){riskMult=RISK_MULTS[i];break;}
-  }
-  return Math.round(base*riskMult);
+  const fuelFrac=clamp(S.ship.fuel/CONFIG.fuelMax,0,1);
+  const fuelBonus=Math.round(fuelFrac*200);
+  const timeBonus=Math.max(0,Math.round(200-S.time*0.5));
+  const base=S.objectivesDone*150+S.wave*50+fuelBonus+timeBonus;
+
+  // Continuous risk index — reflects actual conditions and live play data
+  const gFac=1+CONFIG.gravMult*0.6+Math.min(1,S.peakGrav/300)*0.4;
+  const hFac=1+CONFIG.cometRate*0.35+(CONFIG.bodyDensity-1)*0.2;
+  const fuelRisk=1+(1-fuelFrac)*0.5;
+  const R=gFac*hFac*fuelRisk;
+
+  return Math.round(base*R);
 }
 
 // ================================================================
@@ -190,6 +192,26 @@ function deathMsg(cause) {
   const pool = DEATHS[cause] || DEATHS.asteroid;
   return pool[Math.floor(Math.random() * pool.length)];
 }
+
+// ================================================================
+// NAME GENERATORS  (use seeded RNG — call after seedRng)
+// ================================================================
+const _NA=['Pel','Ar','Ven','Kath','Mir','Vor','Cal','Tar','Zeth','Or','Ael','Cres','Rin','Dav','Nex','Kol','Uth','Ser','Hav','Eld'];
+const _NB=['eth','is','on','ara','ith','en','orn','ath','os','ax','esh','in','ur','el','an','iv','ad'];
+function genBodyName(){
+  const a=_NA[ri(0,_NA.length)],b=_NB[ri(0,_NB.length)];
+  return a+b+(nr()<0.4?_NB[ri(0,_NB.length)]:'');
+}
+function genAstDesig(){
+  const L='ABCDEFGHJKLMNPQRSTVWXYZ';
+  return L[ri(0,L.length)]+'-'+ri(10,99);
+}
+
+// Narrative mission template pools
+const _SUPPLY_VERBS=['Supply','Provision','Deliver cargo to','Resupply'];
+const _URGENT_VERBS=['Urgent: reach','Emergency extraction:','Distress call:','Priority run to'];
+const _STATION_TYPES=['Station','Outpost','Relay','Haven','Platform','Depot','Beacon'];
+const _CARGO=['medical','reactor','personnel','ration','survey','comms'];
 
 // ================================================================
 // SEEDABLE RNG
@@ -487,6 +509,10 @@ function initState() {
     explosion:null,
     runScore:0,
     boostTrail:[],
+    peakGrav:0,
+    laserFired:false,
+    closestApproachFrac:Infinity,
+    achievements:[],
   };
 }
 
@@ -538,7 +564,7 @@ function genWorld() {
 
     const [sc,sg,sr,sm]=STAR_TYPES[ri(0,STAR_TYPES.length)];
     const starIdx=S.bodies.length;
-    S.bodies.push({type:'star',x:stx,y:sty,mass:sm,radius:sr,color:sc,glow:sg,parentIdx:-1});
+    S.bodies.push({type:'star',x:stx,y:sty,mass:sm,radius:sr,color:sc,glow:sg,parentIdx:-1,name:genBodyName()});
 
     // Planets + moons
     const pCount=clamp(Math.round(ri(3,5)*dens),1,rings.length);
@@ -551,6 +577,7 @@ function genWorld() {
         x:clamp(stx+Math.cos(ang)*d,300,MAP-300),
         y:clamp(sty+Math.sin(ang)*d,300,MAP-300),
         mass:1000,radius:rn(26,46),color:pCols[i],glow:pCols[i],parentIdx:starIdx,
+        name:genBodyName(),
       });
       const moonCount=clamp(Math.round(ri(1,4)*dens),0,7);
       for(let j=0;j<moonCount;j++){
@@ -659,8 +686,11 @@ function genObjectives(planetIdxs,asteroidIdxs){
 
   const sp=safePos();
   const spRisk=riskMult(sp.x,sp.y);
+  const spName=genBodyName();
+  const spType=_STATION_TYPES[ri(0,_STATION_TYPES.length)];
+  const spVerb=_SUPPLY_VERBS[ri(0,_SUPPLY_VERBS.length)];
   S.objectives.push({type:'reach',x:sp.x,y:sp.y,radius:DOCK_RADIUS,
-    label:`Reach Station Alpha${riskLabel(spRisk)}`,complete:false,
+    label:`${spVerb} ${spName} ${spType}${riskLabel(spRisk)}`,complete:false,
     fuelReward:Math.round(180*CONFIG.refuelMult*spRisk),color:'#00ffcc'});
 
   if(tier>=2){
@@ -668,15 +698,18 @@ function genObjectives(planetIdxs,asteroidIdxs){
       const ai=asteroidIdxs[ri(0,asteroidIdxs.length)];
       const ab=S.bodies[ai];
       ab.isMining=true; ab.vx=rn(-35,35); ab.vy=rn(-35,35);
+      ab.desig=genAstDesig();
       const mRisk=riskMult(ab.x,ab.y);
       S.objectives.push({type:'mine',targetIdx:ai,
-        label:`Mine Asteroid B-7 (3s)${riskLabel(mRisk)}`,complete:false,
+        label:`Mine asteroid ${ab.desig} (3s)${riskLabel(mRisk)}`,complete:false,
         fuelReward:Math.round(300*CONFIG.refuelMult*mRisk),color:'#ffaa00',progress:0});
     } else {
       const cp=safePos();
       const cRisk=riskMult(cp.x,cp.y);
+      const cargo=_CARGO[ri(0,_CARGO.length)];
+      const cName=genBodyName();
       S.objectives.push({type:'collect',x:cp.x,y:cp.y,radius:DOCK_RADIUS,
-        label:`Collect Resource Pod${riskLabel(cRisk)}`,complete:false,
+        label:`Recover ${cargo} pod: ${cName}${riskLabel(cRisk)}`,complete:false,
         fuelReward:Math.round(200*CONFIG.refuelMult*cRisk),color:'#ffff44'});
     }
   }
@@ -685,22 +718,28 @@ function genObjectives(planetIdxs,asteroidIdxs){
       const n=Math.min(2,planetIdxs.length);
       const tgts=[...planetIdxs].sort(()=>nr()-0.5).slice(0,n);
       const avgRisk=tgts.reduce((s,i)=>s+riskMult(S.bodies[i].x,S.bodies[i].y),0)/tgts.length;
+      const names=tgts.map(i=>S.bodies[i].name||'unknown');
+      const slabel=n===1?`Slingshot past ${names[0]}`:`Slingshot: ${names[0]} → ${names[1]}`;
       S.objectives.push({type:'slingshot',targets:tgts,completed:new Set(),
-        label:`Slingshot ${n} planet${n>1?'s':''}${riskLabel(avgRisk)}`,complete:false,
+        label:`${slabel}${riskLabel(avgRisk)}`,complete:false,
         fuelReward:Math.round(400*CONFIG.refuelMult*avgRisk),color:'#ff88ff'});
     } else if(planetIdxs.length>0){
       const pi=planetIdxs[ri(0,planetIdxs.length)];
       const pRisk=riskMult(S.bodies[pi].x,S.bodies[pi].y);
+      const pName=S.bodies[pi].name||'unknown';
       S.objectives.push({type:'orbit',targetIdx:pi,
-        label:`Establish orbit (5s)${riskLabel(pRisk)}`,complete:false,
+        label:`Establish orbit: ${pName} (5s)${riskLabel(pRisk)}`,complete:false,
         fuelReward:Math.round(350*CONFIG.refuelMult*pRisk),color:'#88ffff',timer:0,required:5});
     }
   }
   if(tier>=4&&nr()>0.5){
     const fp=safePos();
     const fpRisk=riskMult(fp.x,fp.y);
+    const fpVerb=_URGENT_VERBS[ri(0,_URGENT_VERBS.length)];
+    const fpName=genBodyName();
+    const fpType=_STATION_TYPES[ri(0,_STATION_TYPES.length)];
     S.objectives.push({type:'reach',x:fp.x,y:fp.y,radius:DOCK_RADIUS,
-      label:`Reach Station Beta${riskLabel(fpRisk)}`,complete:false,
+      label:`${fpVerb} ${fpName} ${fpType}${riskLabel(fpRisk)}`,complete:false,
       fuelReward:Math.round(180*CONFIG.refuelMult*fpRisk),color:'#ff8844'});
   }
 }
@@ -762,14 +801,20 @@ function updatePhysics(dt){
   }
 
   const g=gravAt(sh.x,sh.y);
+  S.peakGrav=Math.max(S.peakGrav,Math.hypot(g.ax,g.ay));
   sh.vx+=g.ax*dt; sh.vy+=g.ay*dt;
   sh.x+=sh.vx*dt; sh.y+=sh.vy*dt;
 
   if(sh.grace>0) return; // invincible during grace
 
   if(sh.x<-200||sh.x>MAP+200||sh.y<-200||sh.y>MAP+200){killShip('oob');return;}
-  for(const b of S.bodies)
-    if(dist(sh.x,sh.y,b.x,b.y)<b.radius*DRAW_SCALE+SHIP_R){killShip(b.type);return;}
+  for(const b of S.bodies){
+    const bd=dist(sh.x,sh.y,b.x,b.y);
+    const threshold=b.radius*DRAW_SCALE+SHIP_R;
+    const frac=bd/threshold;
+    if(frac<S.closestApproachFrac) S.closestApproachFrac=frac;
+    if(bd<threshold){killShip(b.type);return;}
+  }
   for(const c of S.comets)
     if(dist(sh.x,sh.y,c.x,c.y)<c.radius+SHIP_R){killShip('comet');return;}
 }
@@ -778,7 +823,27 @@ function killShip(cause){
   S.cam.x=S.ship.x; S.cam.y=S.ship.y; // snap so explosion is centred on screen
   S.ship.alive=false; S.phase='dead';
   S.death={cause,message:deathMsg(cause)};
-  S.runScore=computeRunScore();
+
+  // Achievement detection
+  const achs=[];
+  if(S.objectivesDone>0){
+    if(!S.laserFired)
+      achs.push({name:'No Guns',desc:'completed without firing laser',bonus:200});
+    if(S.ship.fuel/CONFIG.fuelMax>0.6)
+      achs.push({name:'Fuel Miser',desc:'60%+ fuel remaining',bonus:300});
+    if(S.closestApproachFrac<1.08)
+      achs.push({name:'Hairline',desc:'near-miss with a celestial body',bonus:500});
+    if(S.time<120)
+      achs.push({name:'Express',desc:'mission complete in under 2 minutes',bonus:400});
+    if(S.peakGrav>250)
+      achs.push({name:'Deep Gravity',desc:'survived extreme gravity field',bonus:350});
+    if(CONFIG.gravMult>=2.0&&CONFIG.cometRate>=2.5)
+      achs.push({name:'Nerves of Steel',desc:'completed on Nerves difficulty',bonus:1000});
+  }
+  S.achievements=achs;
+  const achBonus=achs.reduce((s,a)=>s+a.bonus,0);
+
+  S.runScore=computeRunScore()+achBonus;
   if(PROFILE){
     PROFILE.careerScore=(PROFILE.careerScore||0)+S.runScore;
     if(S.runScore>(PROFILE.bestScore||0)) PROFILE.bestScore=S.runScore;
@@ -814,6 +879,7 @@ function fireLaser(){
   const sh=S.ship;
   if(sh.laserCooldown>0||sh.fuel<LASER_FUEL||!sh.alive) return;
   sh.fuel-=LASER_FUEL; sh.laserCooldown=LASER_COOL;
+  S.laserFired=true;
 
   const dx=Math.sin(sh.angle),dy=-Math.cos(sh.angle);
   const ox=sh.x+dx*SHIP_R*2,oy=sh.y+dy*SHIP_R*2;
@@ -2139,10 +2205,22 @@ function renderDead(){
     ctx.fillText(`career  ${PROFILE.careerScore.toLocaleString()}   ·   best  ${PROFILE.bestScore.toLocaleString()}`,cw/2,ch/2+192);
   }
 
+  // Achievements
+  let achY=ch/2+230;
+  if(S.achievements&&S.achievements.length>0){
+    for(const a of S.achievements){
+      ctx.fillStyle='rgba(255,215,60,0.80)';ctx.font='bold '+fnt(26);
+      ctx.fillText(`★ ${a.name}  +${a.bonus}`,cw/2,achY);
+      ctx.fillStyle='rgba(180,160,80,0.55)';ctx.font=fnt(22);
+      ctx.fillText(a.desc,cw/2,achY+22);
+      achY+=52;
+    }
+  }
+
   const t=Date.now()/1000;
   ctx.fillStyle=`rgba(100,180,220,${0.45+0.45*Math.sin(t*2)})`;
   ctx.font=fnt(46);
-  ctx.fillText('ENTER · new mission      ESC · menu',cw/2,ch/2+248);
+  ctx.fillText('ENTER · new mission      ESC · menu',cw/2,achY+28);
   ctx.textAlign='left';
 }
 
