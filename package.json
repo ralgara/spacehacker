@@ -1,6 +1,6 @@
 {
   "name": "spacehacker",
-  "version": "5.14.0",
+  "version": "5.15.0",
   "description": "Space Pioneer — arcade orbital mechanics game",
   "private": true,
   "scripts": {
