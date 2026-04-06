@@ -67,9 +67,9 @@ const CONFIG = {
   autoZoom:     true,
   starDensity:  1.0,
   // cheats
-  gravMode:       'off',   // 'off'|'contours'|'vectors'|'colormap'
+  gravMode:       'contours', // 'off'|'contours'|'vectors'|'colormap'
   gravVectorScale: 1.0,
-  fieldLineDensity:1.0,
+  fieldLineDensity:2.0,
 };
 
 const COMET_PRESETS  = [['Off',0],['Light',0.5],['Normal',1.0],['Heavy',2.5]];
@@ -744,65 +744,65 @@ function riskLabel(m){
 
 function genObjectives(planetIdxs,asteroidIdxs){
   S.objectives=[];
-  const tier=Math.min(4,1+Math.floor(S.runCount/2));
 
+  // Primary: always a supply/reach mission
   const sp=safePos();
   const spRisk=riskMult(sp.x,sp.y);
-  const spName=genBodyName();
-  const spType=_STATION_TYPES[ri(0,_STATION_TYPES.length)];
-  const spVerb=_SUPPLY_VERBS[ri(0,_SUPPLY_VERBS.length)];
   S.objectives.push({type:'reach',x:sp.x,y:sp.y,radius:DOCK_RADIUS,
-    label:`${spVerb} ${spName} ${spType}${riskLabel(spRisk)}`,complete:false,
-    fuelReward:Math.round(180*CONFIG.refuelMult*spRisk),color:'#00ffcc'});
+    label:`${_SUPPLY_VERBS[ri(0,_SUPPLY_VERBS.length)]} ${genBodyName()} ${_STATION_TYPES[ri(0,_STATION_TYPES.length)]}${riskLabel(spRisk)}`,
+    complete:false,fuelReward:Math.round(180*CONFIG.refuelMult*spRisk),color:'#00ffcc'});
 
-  if(tier>=2){
-    if(nr()>0.5&&asteroidIdxs.length>0){
+  // Secondary pool — all types available from run 1, shuffled randomly
+  const secPool=[];
+  if(asteroidIdxs.length>0) secPool.push('mine');
+  secPool.push('collect');
+  if(planetIdxs.length>=1) secPool.push('orbit');
+  if(planetIdxs.length>=1) secPool.push('slingshot');
+  secPool.sort(()=>nr()-0.5);
+
+  // 1 secondary always; 60% chance of a 2nd
+  const wantSec=1+(nr()<0.60?1:0);
+
+  for(const type of secPool){
+    if(S.objectives.length>=1+wantSec) break;
+    if(type==='mine'){
       const ai=asteroidIdxs[ri(0,asteroidIdxs.length)];
       const ab=S.bodies[ai];
-      ab.isMining=true; ab.vx=rn(-35,35); ab.vy=rn(-35,35);
-      ab.desig=genAstDesig();
+      ab.isMining=true; ab.vx=rn(-35,35); ab.vy=rn(-35,35); ab.desig=genAstDesig();
       const mRisk=riskMult(ab.x,ab.y);
       S.objectives.push({type:'mine',targetIdx:ai,
         label:`Mine asteroid ${ab.desig} (3s)${riskLabel(mRisk)}`,complete:false,
         fuelReward:Math.round(300*CONFIG.refuelMult*mRisk),color:'#ffaa00',progress:0});
-    } else {
+    } else if(type==='collect'){
       const cp=safePos();
       const cRisk=riskMult(cp.x,cp.y);
-      const cargo=_CARGO[ri(0,_CARGO.length)];
-      const cName=genBodyName();
       S.objectives.push({type:'collect',x:cp.x,y:cp.y,radius:DOCK_RADIUS,
-        label:`Recover ${cargo} pod: ${cName}${riskLabel(cRisk)}`,complete:false,
+        label:`Recover ${_CARGO[ri(0,_CARGO.length)]} pod: ${genBodyName()}${riskLabel(cRisk)}`,complete:false,
         fuelReward:Math.round(200*CONFIG.refuelMult*cRisk),color:'#ffff44'});
-    }
-  }
-  if(tier>=3&&nr()>0.35){
-    if(nr()>0.5&&planetIdxs.length>=2){
-      const n=Math.min(2,planetIdxs.length);
-      const tgts=[...planetIdxs].sort(()=>nr()-0.5).slice(0,n);
+    } else if(type==='slingshot'){
+      const count=planetIdxs.length>=2&&nr()>0.5?2:1;
+      const tgts=[...planetIdxs].sort(()=>nr()-0.5).slice(0,count);
       const avgRisk=tgts.reduce((s,i)=>s+riskMult(S.bodies[i].x,S.bodies[i].y),0)/tgts.length;
       const names=tgts.map(i=>S.bodies[i].name||'unknown');
-      const slabel=n===1?`Slingshot past ${names[0]}`:`Slingshot: ${names[0]} → ${names[1]}`;
       S.objectives.push({type:'slingshot',targets:tgts,completed:new Set(),
-        label:`${slabel}${riskLabel(avgRisk)}`,complete:false,
-        fuelReward:Math.round(400*CONFIG.refuelMult*avgRisk),color:'#ff88ff'});
-    } else if(planetIdxs.length>0){
+        label:`${count===1?`Slingshot past ${names[0]}`:`Slingshot: ${names[0]} → ${names[1]}`}${riskLabel(avgRisk)}`,
+        complete:false,fuelReward:Math.round(400*CONFIG.refuelMult*avgRisk),color:'#ff88ff'});
+    } else if(type==='orbit'){
       const pi=planetIdxs[ri(0,planetIdxs.length)];
       const pRisk=riskMult(S.bodies[pi].x,S.bodies[pi].y);
-      const pName=S.bodies[pi].name||'unknown';
       S.objectives.push({type:'orbit',targetIdx:pi,
-        label:`Establish orbit: ${pName} (5s)${riskLabel(pRisk)}`,complete:false,
+        label:`Establish orbit: ${S.bodies[pi].name||'unknown'} (5s)${riskLabel(pRisk)}`,complete:false,
         fuelReward:Math.round(350*CONFIG.refuelMult*pRisk),color:'#88ffff',timer:0,required:5});
     }
   }
-  if(tier>=4&&nr()>0.5){
+
+  // Run 6+: occasional urgent 3rd secondary (second reach)
+  if(S.runCount>=6&&nr()>0.55){
     const fp=safePos();
     const fpRisk=riskMult(fp.x,fp.y);
-    const fpVerb=_URGENT_VERBS[ri(0,_URGENT_VERBS.length)];
-    const fpName=genBodyName();
-    const fpType=_STATION_TYPES[ri(0,_STATION_TYPES.length)];
     S.objectives.push({type:'reach',x:fp.x,y:fp.y,radius:DOCK_RADIUS,
-      label:`${fpVerb} ${fpName} ${fpType}${riskLabel(fpRisk)}`,complete:false,
-      fuelReward:Math.round(180*CONFIG.refuelMult*fpRisk),color:'#ff8844'});
+      label:`${_URGENT_VERBS[ri(0,_URGENT_VERBS.length)]} ${genBodyName()} ${_STATION_TYPES[ri(0,_STATION_TYPES.length)]}${riskLabel(fpRisk)}`,
+      complete:false,fuelReward:Math.round(180*CONFIG.refuelMult*fpRisk),color:'#ff8844'});
   }
 }
 
