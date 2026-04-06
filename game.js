@@ -1843,7 +1843,7 @@ function renderGravContours(){
   const ww=hw*2, wh=hh*2;
 
   // Cell size in screen pixels — fieldLineDensity shrinks the step (more cells = finer lines)
-  const STEP_PX=Math.max(4, Math.round(14/CONFIG.fieldLineDensity));
+  const STEP_PX=Math.max(2, Math.round(8/CONFIG.fieldLineDensity));
   const COLS=Math.ceil(cw/STEP_PX), ROWS=Math.ceil(ch/STEP_PX);
   const wStep=ww/COLS, hStep=wh/ROWS;
   const W=COLS+1, H=ROWS+1;
@@ -1875,7 +1875,7 @@ function renderGravContours(){
 
   // Log-spaced iso-levels 0.3→1000; count scales with fieldLineDensity so
   // Sparse(0.5)=4 levels, Normal(1.0)=8, Dense(1.5)=12, Fine(2.0)=16
-  const nLev=Math.max(2,Math.round(8*CONFIG.fieldLineDensity));
+  const nLev=Math.max(2,Math.round(14*CONFIG.fieldLineDensity));
   const logMin=Math.log10(0.3),logMax=Math.log10(1000);
   const LEVELS=Array.from({length:nLev},(_,i)=>Math.pow(10,logMin+(logMax-logMin)*i/Math.max(nLev-1,1)));
   const COLORS=LEVELS.map((_,i)=>{const t=i/Math.max(nLev-1,1);return`rgb(${Math.round(t*128)},${Math.round(40+t*200)},${Math.round(64+t*191)})`;});
@@ -2205,12 +2205,24 @@ function renderHUD(){
     }
   }
 
-  // ---- Cheat HUD: gravity magnitude + bearing ----
+  // ---- Nav data: heading · grav (g) · absolute grav direction ----
   let gravHudH=0;
-  if(S.cheat&&sh.alive){
+  if(sh.alive){
     const g=gravAt(sh.x,sh.y);
     const gMag=Math.hypot(g.ax,g.ay);
+    const headingDeg=Math.round(((sh.angle*180/Math.PI)%360+360)%360);
+    let navLine=`HDG  ${String(headingDeg).padStart(3,'0')}°`;
     if(gMag>=0.5){
+      const gs=(gMag/50).toFixed(2);
+      const gravDirDeg=Math.round(((Math.atan2(g.ax,-g.ay)*180/Math.PI)%360+360)%360);
+      navLine+=`    GRAV  ${gs}g  →  ${String(gravDirDeg).padStart(3,'0')}°`;
+    }
+    ctx.fillStyle=C_VALUE;ctx.font=fnt(22);
+    ctx.fillText(navLine,fx,statY+28);
+    gravHudH=26;
+
+    // Cheat mode: relative grav bearing (additional detail)
+    if(S.cheat&&gMag>=0.5){
       const fwdX=Math.sin(sh.angle),fwdY=-Math.cos(sh.angle);
       const gnx=g.ax/gMag,gny=g.ay/gMag;
       const cross=fwdX*gny-fwdY*gnx;
@@ -2218,8 +2230,8 @@ function renderHUD(){
       const bearDeg=Math.round(Math.atan2(cross,dot)*180/Math.PI);
       const bearStr=bearDeg===0?'fwd':Math.abs(bearDeg)>=175?'aft':`${Math.abs(bearDeg)}° ${cross>=0?'R':'L'}`;
       ctx.fillStyle=C_LABEL;ctx.font=fnt(22);
-      ctx.fillText(`GRAV  ${gMag.toFixed(1)} u/s²  ·  ${bearStr}`,fx,statY+28);
-      gravHudH=28;
+      ctx.fillText(`GRAV bearing  ${bearStr}`,fx,statY+54);
+      gravHudH=52;
     }
   }
 
