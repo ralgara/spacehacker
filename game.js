@@ -2239,16 +2239,16 @@ function renderHUD(){
     ctx.strokeStyle='#0a2a22'; ctx.lineWidth=1; ctx.strokeRect(GX,laserBarY,GW,5);
   }
 
-  // Emergency tank text
+  // Emergency tank text — left-aligned below laser bar
+  ctx.font=fnt(11); ctx.textAlign='left';
   if(S.extraFuelReady){
     const pulse=0.7+0.3*Math.sin(now_ms/400);
-    ctx.fillStyle=`rgba(80,255,160,${pulse})`; ctx.font=fnt(11); ctx.textAlign='right';
-    ctx.fillText('F · EMERGENCY TANK', GX-6, GY+GH+17);
+    ctx.fillStyle=`rgba(80,255,160,${pulse})`;
+    ctx.fillText('F · EMERGENCY TANK', fx, GY+GH+17);
   } else {
-    ctx.fillStyle='#1e2e3e'; ctx.font=fnt(11); ctx.textAlign='right';
-    ctx.fillText('F · used', GX-6, GY+GH+17);
+    ctx.fillStyle='#1e2e3e';
+    ctx.fillText('F · tank used', fx, GY+GH+17);
   }
-  ctx.textAlign='left';
 
   // ---- HDG — compass only ----
   const hdgCY=GT+GH/2;
