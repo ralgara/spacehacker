@@ -66,6 +66,7 @@ const CONFIG = {
   bodyDensity:  1.0,
   autoZoom:     true,
   starDensity:  1.0,
+  missionTolerance: 2.5,
   // cheats
   gravMode:       'contours', // 'off'|'contours'|'vectors'|'colormap'
   gravVectorScale: 1.0,
@@ -82,6 +83,7 @@ const GRAV_VECTOR_PRESETS  = [['×½',0.5],['×1',1.0],['×2',2.0],['×4',4.0]];
 const FIELD_DENSITY_PRESETS= [['Sparse',0.5],['Normal',1.0],['Dense',1.5],['Fine',2.0]];
 const GRAV_MODE_PRESETS   = [['Off','off'],['Contours','contours'],['Vectors','vectors'],['Colormap','colormap']];
 const STAR_DENSITY_PRESETS= [['Dim',0.5],['Normal',1.0],['Rich',1.5],['Dense',2.0]];
+const MISSION_TOL_PRESETS = [['×1',1.0],['×2',2.0],['×3',3.0],['×5',5.0]];
 
 // Risk-level presets bundle: [label, {gravMult,cometRate,fuelMax,refuelMult}]
 const RISK_PRESETS = [
@@ -1167,7 +1169,7 @@ function updateObjectives(dt){
     } else if(obj.type==='slingshot'){
       for(const pi of obj.targets){
         if(obj.completed.has(pi)||pi>=S.bodies.length) continue;
-        if(dist(sh.x,sh.y,S.bodies[pi].x,S.bodies[pi].y)<S.bodies[pi].radius*DRAW_SCALE*1.4) obj.completed.add(pi);
+        if(dist(sh.x,sh.y,S.bodies[pi].x,S.bodies[pi].y)<S.bodies[pi].radius*DRAW_SCALE*1.4*CONFIG.missionTolerance) obj.completed.add(pi);
       }
       if(obj.completed.size>=obj.targets.length) completObj(obj);
     } else if(obj.type==='orbit'){
@@ -1178,7 +1180,8 @@ function updateObjectives(dt){
       const ux=(b.x-sh.x)/r,uy=(b.y-sh.y)/r;
       const vRad=sh.vx*ux+sh.vy*uy;
       const vTan=Math.sqrt(Math.max(0,vShip*vShip-vRad*vRad));
-      if(r>b.radius*DRAW_SCALE*1.2&&r<b.radius*DRAW_SCALE*3.2&&Math.abs(vTan-vCirc)/vCirc<0.45){
+      const mt=CONFIG.missionTolerance;
+      if(r>b.radius*DRAW_SCALE*1.2*mt&&r<b.radius*DRAW_SCALE*3.2*mt&&Math.abs(vTan-vCirc)/vCirc<0.45){
         obj.timer+=dt; if(obj.timer>=obj.required) completObj(obj);
       } else {
         obj.timer=Math.max(0,obj.timer-dt*0.5);
@@ -1619,18 +1622,19 @@ function renderObjMarkers(){
         if(obj.completed.has(pi)||pi>=S.bodies.length) continue;
         const b=S.bodies[pi];
         ctx.strokeStyle=obj.color;ctx.lineWidth=2;ctx.setLineDash([10,8]);ctx.globalAlpha=pulse;
-        ctx.beginPath();ctx.arc(b.x,b.y,b.radius*DRAW_SCALE*1.4,0,Math.PI*2);
+        ctx.beginPath();ctx.arc(b.x,b.y,b.radius*DRAW_SCALE*1.4*CONFIG.missionTolerance,0,Math.PI*2);
         ctx.stroke();ctx.setLineDash([]);ctx.globalAlpha=1;
       }
     } else if(obj.type==='orbit'){
       const b=S.bodies[obj.targetIdx];
+      const omt=CONFIG.missionTolerance;
       ctx.strokeStyle=obj.color;ctx.lineWidth=1;ctx.globalAlpha=0.35;
-      ctx.beginPath();ctx.arc(b.x,b.y,b.radius*DRAW_SCALE*1.2,0,Math.PI*2);ctx.stroke();
-      ctx.beginPath();ctx.arc(b.x,b.y,b.radius*DRAW_SCALE*3.2,0,Math.PI*2);ctx.stroke();
+      ctx.beginPath();ctx.arc(b.x,b.y,b.radius*DRAW_SCALE*1.2*omt,0,Math.PI*2);ctx.stroke();
+      ctx.beginPath();ctx.arc(b.x,b.y,b.radius*DRAW_SCALE*3.2*omt,0,Math.PI*2);ctx.stroke();
       ctx.globalAlpha=1;
       if(obj.timer>0){
         ctx.strokeStyle=obj.color;ctx.lineWidth=4;
-        ctx.beginPath();ctx.arc(b.x,b.y,b.radius*DRAW_SCALE*2.2,-Math.PI/2,-Math.PI/2+(obj.timer/obj.required)*Math.PI*2);
+        ctx.beginPath();ctx.arc(b.x,b.y,b.radius*DRAW_SCALE*2.2*omt,-Math.PI/2,-Math.PI/2+(obj.timer/obj.required)*Math.PI*2);
         ctx.stroke();
       }
     }
@@ -2121,63 +2125,140 @@ function renderTraj(){
 // ================================================================
 function fnt(sz, mono=true) { return `${sz}px ${mono?'"Orbitron", monospace':'Georgia, serif'}`; }
 
+// Linear gauge: label right-aligned at GX-6, bar GX→GX+GW, value text right of bar
+function drawGauge(label, gy, frac, fillColor, valueText){
+  const GX=68,GW=200,GH=13;
+  ctx.fillStyle='#0a0f1a'; ctx.fillRect(GX,gy,GW,GH);
+  const f=Math.min(1,Math.max(0,frac));
+  if(f>0){ctx.fillStyle=fillColor; ctx.fillRect(GX,gy,GW*f,GH);}
+  ctx.strokeStyle='#1a3355'; ctx.lineWidth=1; ctx.strokeRect(GX,gy,GW,GH);
+  ctx.fillStyle='#4a6a8a'; ctx.font=fnt(12); ctx.textAlign='right';
+  ctx.fillText(label, GX-6, gy+GH-1);
+  if(valueText){ctx.fillStyle=fillColor; ctx.textAlign='left'; ctx.fillText(valueText, GX+GW+8, gy+GH-1);}
+  ctx.textAlign='left';
+}
+
 function renderHUD(){
   const cw=canvas.width,ch=canvas.height;
   const sh=S.ship;
 
-  // ---- Fuel bar ----
-  const fw=300,fh=22,fx=22,fy=22;
+  // ---- Cockpit gauges ----
+  // Layout: label (right-aligned) | bar (GX→GX+GW) | value text
+  const GX=68,GW=200,GH=13,GY=22,GSTEP=24;
+  const fx=22; // left anchor for objectives and floating text
   const fp=sh.fuel/CONFIG.fuelMax;
   const now_ms=Date.now();
 
-  // Blink timing: slow at <10%, fast at <3%
-  const blinkSlow = Math.floor(now_ms/500)%2===0;   // 1 Hz
-  const blinkFast = Math.floor(now_ms/165)%2===0;   // ~3 Hz
-  const isLow      = fp<0.10;
-  const isCritical = fp<0.03;
-  const isAlarm    = fp<0.01;
-  const barVisible = isCritical ? blinkFast : (isLow ? blinkSlow : true);
+  const blinkSlow=Math.floor(now_ms/500)%2===0;
+  const blinkFast=Math.floor(now_ms/165)%2===0;
+  const isLow=fp<0.10, isCritical=fp<0.03, isAlarm=fp<0.01;
+  const barVisible=isCritical?blinkFast:(isLow?blinkSlow:true);
 
-  // Bar color
   let fc;
-  if(isCritical)       fc='#ff2233';
-  else if(isLow)       fc='#ffdd00';
-  else if(fp>0.50)     fc='#22ffbb';
-  else if(fp>0.25)     fc='#ffaa00';
-  else                 fc=C_WARN;
+  if(isCritical)    fc='#ff2233';
+  else if(isLow)    fc='#ffdd00';
+  else if(fp>0.50)  fc='#22ffbb';
+  else if(fp>0.25)  fc='#ffaa00';
+  else              fc=C_WARN;
 
-  ctx.fillStyle='#0a0f1a';ctx.fillRect(fx,fy,fw,fh);
-  if(barVisible) { ctx.fillStyle=fc;ctx.fillRect(fx,fy,fw*fp,fh); }
-  ctx.strokeStyle=isLow?fc:'#1a3355';ctx.lineWidth=1;ctx.strokeRect(fx,fy,fw,fh);
+  // --- Physics quantities ---
+  const g=gravAt(sh.x,sh.y);
+  const gMag=Math.hypot(g.ax,g.ay);
+  const gravG=gMag/50;
+  const gravFrac=Math.min(1,gravG/10);
+  const gravDirDeg=gMag>=0.5?Math.round(((Math.atan2(g.ax,-g.ay)*180/Math.PI)%360+360)%360):null;
 
-  ctx.fillStyle=C_LABEL;ctx.font=fnt(20);ctx.fillText('FUEL',fx+fw+10,fy+10);
-  // Emergency fuel tank indicator
-  if(S.extraFuelReady){
-    const et=Date.now()/1000;
-    const pulse=0.7+0.3*Math.sin(et*2.5);
-    ctx.fillStyle=`rgba(80,255,160,${pulse})`;
-    ctx.font='bold '+fnt(18);
-    ctx.fillText('F · EMERGENCY TANK +30%',fx+fw+10,fy+44);
-  } else {
-    ctx.fillStyle='#223344';ctx.font=fnt(18);
-    ctx.fillText('F · tank used (next run)',fx+fw+10,fy+44);
-  }
-  ctx.fillStyle=fc;ctx.font=fnt(18);
-  ctx.fillText(`${Math.ceil(sh.fuel)} / ${CONFIG.fuelMax}  ·  ${Math.floor(fp*100)}%`,fx+fw+10,fy+26);
+  const boosting=keys.ShiftLeft||keys.ShiftRight;
+  const tAmtHud=(keys.KeyW||keys.ArrowUp)?1:(keys.KeyS||keys.ArrowDown)?-0.4:0;
+  const thrustG=sh.fuel>0&&tAmtHud!==0?THRUST*(boosting?BOOST_MULT:1)*Math.abs(tAmtHud)/50:0;
+  const accelFrac=Math.min(1,thrustG/6);
 
-  // CRITICAL label
+  const spdMag=Math.hypot(sh.vx,sh.vy);
+  const spdFrac=Math.min(1,spdMag/800);
+  const spdCol=spdFrac>0.65?'#ff3344':spdFrac>0.35?'#ffaa00':'#22ffbb';
+
+  const headingDeg=Math.round(((sh.angle*180/Math.PI)%360+360)%360);
+
+  // FUEL gauge (manual — needs blink logic)
+  ctx.fillStyle='#0a0f1a'; ctx.fillRect(GX,GY,GW,GH);
+  if(barVisible){ctx.fillStyle=fc; ctx.fillRect(GX,GY,GW*fp,GH);}
+  ctx.strokeStyle=isLow?fc:'#1a3355'; ctx.lineWidth=1; ctx.strokeRect(GX,GY,GW,GH);
+  ctx.fillStyle='#4a6a8a'; ctx.font=fnt(12); ctx.textAlign='right';
+  ctx.fillText('FUEL', GX-6, GY+GH-1);
+  ctx.fillStyle=fc; ctx.textAlign='left';
+  ctx.fillText(`${Math.floor(fp*100)}%`, GX+GW+8, GY+GH-1);
   if(isAlarm){
     ctx.fillStyle=`rgba(255,30,40,${blinkFast?1:0.4})`;
-    ctx.font='bold '+fnt(22);ctx.textAlign='center';
-    ctx.fillText('CRITICAL',fx+fw/2,fy+16);
-    ctx.textAlign='left';
+    ctx.font='bold '+fnt(10); ctx.textAlign='center';
+    ctx.fillText('CRITICAL', GX+GW/2, GY+GH-2);
   }
+  ctx.textAlign='left';
+
+  // Laser cooldown — thin bar directly below FUEL
+  const laserBarY=GY+GH+3;
+  if(sh.laserCooldown>0){
+    const lp=sh.laserCooldown/LASER_COOL;
+    ctx.fillStyle='#071410'; ctx.fillRect(GX,laserBarY,GW,5);
+    ctx.fillStyle=`rgba(0,255,180,${0.6-lp*0.2})`; ctx.fillRect(GX,laserBarY,GW*(1-lp),5);
+    ctx.strokeStyle='#0a2a22'; ctx.lineWidth=1; ctx.strokeRect(GX,laserBarY,GW,5);
+  }
+
+  // Emergency tank indicator — small text below laser bar
+  const emY=GY+GH+14;
+  if(S.extraFuelReady){
+    const pulse=0.7+0.3*Math.sin(now_ms/400);
+    ctx.fillStyle=`rgba(80,255,160,${pulse})`; ctx.font=fnt(11); ctx.textAlign='right';
+    ctx.fillText('F · EMERGENCY TANK', GX-6, emY);
+  } else {
+    ctx.fillStyle='#1a2a3a'; ctx.font=fnt(11); ctx.textAlign='right';
+    ctx.fillText('F · tank used', GX-6, emY);
+  }
+  ctx.textAlign='left';
+
+  // SPD gauge
+  drawGauge('SPD', GY+GSTEP, spdFrac, spdCol,
+    sh.fuel<=0&&sh.zeroFuelTimer>0
+      ? `DRIFT ${Math.ceil(DEAD_DRIFT-sh.zeroFuelTimer)}s`
+      : spdMag.toFixed(0));
+
+  // GRAV gauge — net gravitational acceleration
+  const gravValStr=gravG>=0.05
+    ? `${gravG.toFixed(2)}g${gravDirDeg!=null?' →'+String(gravDirDeg).padStart(3,'0')+'°':''}`
+    : null;
+  drawGauge('GRAV', GY+GSTEP*2, gravFrac, '#ffc844', gravValStr);
+
+  // ACCEL gauge — thrust acceleration only (not gravity)
+  const accelValStr=thrustG>=0.05
+    ? `${thrustG.toFixed(2)}g ${tAmtHud>0?'↑':'↓'}`
+    : null;
+  drawGauge('ACCEL', GY+GSTEP*3, accelFrac, '#00dcff', accelValStr);
+
+  // HDG text
+  ctx.fillStyle=C_VALUE; ctx.font=fnt(14);
+  ctx.fillText(`HDG  ${String(headingDeg).padStart(3,'0')}°`, GX, GY+GSTEP*4+GH);
+
+  // Cheat mode: relative grav bearing
+  let gravHudH=0;
+  if(S.cheat&&gMag>=0.5){
+    const fwdX=Math.sin(sh.angle),fwdY=-Math.cos(sh.angle);
+    const gnx=g.ax/gMag,gny=g.ay/gMag;
+    const cross=fwdX*gny-fwdY*gnx;
+    const dot=fwdX*gnx+fwdY*gny;
+    const bearDeg=Math.round(Math.atan2(cross,dot)*180/Math.PI);
+    const bearStr=bearDeg===0?'fwd':Math.abs(bearDeg)>=175?'aft':`${Math.abs(bearDeg)}° ${cross>=0?'R':'L'}`;
+    ctx.fillStyle=C_LABEL; ctx.font=fnt(12);
+    ctx.fillText(`GRAV bearing  ${bearStr}`, GX, GY+GSTEP*4+GH+16);
+    gravHudH=18;
+  }
+
+  // statY — base y for objectives list below the gauge stack
+  const statY=GY+GSTEP*4+GH+6;
 
   // Fuel bonus popups — large floating text at ship position
   ctx.textAlign='center';
   for(const p of S.fuelPopups){
-    const sx=p.wx!=null ? w2s(p.wx,p.wy).x : fx+fw/2;
-    const sy=p.wx!=null ? w2s(p.wx,p.wy).y-p.dy*2.5-50 : fy-12-p.dy;
+    const sx=p.wx!=null ? w2s(p.wx,p.wy).x : GX+GW/2;
+    const sy=p.wx!=null ? w2s(p.wx,p.wy).y-p.dy*2.5-50 : GY-12-p.dy;
     ctx.globalAlpha=p.alpha;
     ctx.shadowColor='rgba(60,255,150,0.9)'; ctx.shadowBlur=16;
     ctx.fillStyle='#55ffbb';
@@ -2187,81 +2268,9 @@ function renderHUD(){
   }
   ctx.globalAlpha=1; ctx.textAlign='left';
 
-  // Low-fuel screen pulse (only below 3%, synced to fast blink)
+  // Low-fuel screen pulse
   if(isCritical&&blinkFast){
-    ctx.fillStyle='rgba(255,40,40,0.10)';ctx.fillRect(0,0,cw,ch);
-  }
-
-  // Laser cooldown bar
-  const lfy=fy+fh+5;
-  if(sh.laserCooldown>0){
-    const lp=sh.laserCooldown/LASER_COOL;
-    ctx.fillStyle='#071410';ctx.fillRect(fx,lfy,fw,7);
-    ctx.fillStyle=`rgba(0,255,180,${0.6-lp*0.2})`;
-    ctx.fillRect(fx,lfy,fw*(1-lp),7);
-    ctx.strokeStyle='#0a2a22';ctx.lineWidth=1;ctx.strokeRect(fx,lfy,fw,7);
-  }
-
-  const statY=lfy+(sh.laserCooldown>0?14:8)+16;
-
-  if(sh.fuel<=0&&sh.zeroFuelTimer>0){
-    const sLeft=Math.ceil(DEAD_DRIFT-sh.zeroFuelTimer);
-    ctx.fillStyle=C_WARN;ctx.font='bold '+fnt(30);
-    ctx.fillText(`DRIFTING — ${sLeft}s`,fx,statY);
-  } else {
-    const spdMag=Math.hypot(sh.vx,sh.vy);
-    ctx.fillStyle=C_VALUE;ctx.font=fnt(27);
-    ctx.fillText(`SPD  ${spdMag.toFixed(0)}`,fx,statY);
-    // Prograde indicator — shows velocity direction in ship's reference frame
-    if(spdMag>1){
-      const fwdX=Math.sin(sh.angle),fwdY=-Math.cos(sh.angle);
-      const rtX=Math.cos(sh.angle),rtY=Math.sin(sh.angle);
-      const vnx=sh.vx/spdMag,vny=sh.vy/spdMag;
-      const fwdComp=vnx*fwdX+vny*fwdY; // +1 = nose direction
-      const rtComp =vnx*rtX +vny*rtY;  // +1 = right
-      const pcx=fx+155,pcy=statY-8,pcr=13;
-      ctx.strokeStyle='rgba(0,160,140,0.45)';ctx.lineWidth=1;
-      ctx.beginPath();ctx.arc(pcx,pcy,pcr,0,Math.PI*2);ctx.stroke();
-      // small tick at top = forward
-      ctx.strokeStyle='rgba(0,160,140,0.30)';ctx.lineWidth=1;
-      ctx.beginPath();ctx.moveTo(pcx,pcy-pcr+2);ctx.lineTo(pcx,pcy-pcr+5);ctx.stroke();
-      // velocity direction needle
-      ctx.strokeStyle='#00ffcc';ctx.lineWidth=2;
-      const ex=pcx+rtComp*pcr*0.82,ey=pcy-fwdComp*pcr*0.82;
-      ctx.beginPath();ctx.moveTo(pcx,pcy);ctx.lineTo(ex,ey);ctx.stroke();
-      ctx.fillStyle='#00ffcc';
-      ctx.beginPath();ctx.arc(ex,ey,2.5,0,Math.PI*2);ctx.fill();
-    }
-  }
-
-  // ---- Nav data: heading · grav (g) · absolute grav direction ----
-  let gravHudH=0;
-  if(sh.alive){
-    const g=gravAt(sh.x,sh.y);
-    const gMag=Math.hypot(g.ax,g.ay);
-    const headingDeg=Math.round(((sh.angle*180/Math.PI)%360+360)%360);
-    let navLine=`HDG  ${String(headingDeg).padStart(3,'0')}°`;
-    if(gMag>=0.5){
-      const gs=(gMag/50).toFixed(2);
-      const gravDirDeg=Math.round(((Math.atan2(g.ax,-g.ay)*180/Math.PI)%360+360)%360);
-      navLine+=`    GRAV  ${gs}g  →  ${String(gravDirDeg).padStart(3,'0')}°`;
-    }
-    ctx.fillStyle=C_VALUE;ctx.font=fnt(22);
-    ctx.fillText(navLine,fx,statY+28);
-    gravHudH=26;
-
-    // Cheat mode: relative grav bearing (additional detail)
-    if(S.cheat&&gMag>=0.5){
-      const fwdX=Math.sin(sh.angle),fwdY=-Math.cos(sh.angle);
-      const gnx=g.ax/gMag,gny=g.ay/gMag;
-      const cross=fwdX*gny-fwdY*gnx;
-      const dot=fwdX*gnx+fwdY*gny;
-      const bearDeg=Math.round(Math.atan2(cross,dot)*180/Math.PI);
-      const bearStr=bearDeg===0?'fwd':Math.abs(bearDeg)>=175?'aft':`${Math.abs(bearDeg)}° ${cross>=0?'R':'L'}`;
-      ctx.fillStyle=C_LABEL;ctx.font=fnt(22);
-      ctx.fillText(`GRAV bearing  ${bearStr}`,fx,statY+54);
-      gravHudH=52;
-    }
+    ctx.fillStyle='rgba(255,40,40,0.10)'; ctx.fillRect(0,0,cw,ch);
   }
 
   // Grace indicator
@@ -2729,6 +2738,15 @@ function renderConfig(){
   const dw=70;
   DENSITY_PRESETS.forEach(([lbl,val],i)=>{
     _cfgBtn(lbl,CONFIG.bodyDensity===val,lx+labelW+i*(dw+gap),row,dw,bh,()=>{CONFIG.bodyDensity=val;});
+  });
+
+  row+=bh+10;
+  // Mission tolerance
+  ctx.fillStyle=C_VALUE;ctx.font=fnt(21);ctx.textAlign='left';
+  ctx.fillText('MISSION R',lx,row+bh*0.67);
+  const mtw=64;
+  MISSION_TOL_PRESETS.forEach(([lbl,val],i)=>{
+    _cfgBtn(lbl,CONFIG.missionTolerance===val,lx+labelW+i*(mtw+gap),row,mtw,bh,()=>{CONFIG.missionTolerance=val;});
   });
 
   // ---- cheats divider ----
