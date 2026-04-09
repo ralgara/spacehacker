@@ -2125,16 +2125,39 @@ function renderTraj(){
 // ================================================================
 function fnt(sz, mono=true) { return `${sz}px ${mono?'"Orbitron", monospace':'Georgia, serif'}`; }
 
-// Linear gauge: label right-aligned at GX-6, bar GX→GX+GW, value text right of bar
-function drawGauge(label, gy, frac, fillColor, valueText){
-  const GX=68,GW=200,GH=13;
-  ctx.fillStyle='#0a0f1a'; ctx.fillRect(GX,gy,GW,GH);
-  const f=Math.min(1,Math.max(0,frac));
-  if(f>0){ctx.fillStyle=fillColor; ctx.fillRect(GX,gy,GW*f,GH);}
-  ctx.strokeStyle='#1a3355'; ctx.lineWidth=1; ctx.strokeRect(GX,gy,GW,GH);
-  ctx.fillStyle='#4a6a8a'; ctx.font=fnt(12); ctx.textAlign='right';
-  ctx.fillText(label, GX-6, gy+GH-1);
-  if(valueText){ctx.fillStyle=fillColor; ctx.textAlign='left'; ctx.fillText(valueText, GX+GW+8, gy+GH-1);}
+// Compass needle: circle with arrowhead pointing in angleRad (0=up, CW positive)
+function drawCompass(cx, cy, r, angleRad, color, active){
+  ctx.fillStyle='rgba(3,7,16,0.92)';
+  ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle='#1e3354'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.stroke();
+  if(!active) return;
+  // 12-o'clock reference tick
+  ctx.save(); ctx.globalAlpha=0.4; ctx.strokeStyle=color; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(cx,cy-r+2); ctx.lineTo(cx,cy-r+5); ctx.stroke(); ctx.restore();
+  // needle from tail to tip
+  const nx=Math.sin(angleRad), ny=-Math.cos(angleRad);
+  const tip={x:cx+nx*r*0.80, y:cy+ny*r*0.80};
+  const tail={x:cx-nx*r*0.28, y:cy-ny*r*0.28};
+  ctx.strokeStyle=color; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(tail.x,tail.y); ctx.lineTo(tip.x,tip.y); ctx.stroke();
+  // arrowhead
+  const ang=Math.atan2(ny,nx), as=5;
+  ctx.fillStyle=color; ctx.beginPath();
+  ctx.moveTo(tip.x, tip.y);
+  ctx.lineTo(tip.x-as*Math.cos(ang-0.45), tip.y-as*Math.sin(ang-0.45));
+  ctx.lineTo(tip.x-as*Math.cos(ang+0.45), tip.y-as*Math.sin(ang+0.45));
+  ctx.closePath(); ctx.fill();
+}
+
+// Linear gauge bar with label and value text
+function drawGauge(label, labelRX, barX, barY, barW, barH, frac, fillColor, valueText){
+  ctx.fillStyle='#0a0f1a'; ctx.fillRect(barX,barY,barW,barH);
+  if(frac>0){ctx.fillStyle=fillColor; ctx.fillRect(barX,barY,barW*Math.min(1,frac),barH);}
+  ctx.strokeStyle='#1a3355'; ctx.lineWidth=1; ctx.strokeRect(barX,barY,barW,barH);
+  ctx.fillStyle='#3a5a7a'; ctx.font=fnt(12); ctx.textAlign='right';
+  ctx.fillText(label, labelRX, barY+barH-1);
+  if(valueText){ctx.fillStyle=fillColor; ctx.textAlign='left'; ctx.fillText(valueText, barX+barW+8, barY+barH-1);}
   ctx.textAlign='left';
 }
 
@@ -2142,48 +2165,61 @@ function renderHUD(){
   const cw=canvas.width,ch=canvas.height;
   const sh=S.ship;
 
-  // ---- Cockpit gauges ----
-  // Layout: label (right-aligned) | bar (GX→GX+GW) | value text
-  const GX=68,GW=200,GH=13,GY=22,GSTEP=24;
-  const fx=22; // left anchor for objectives and floating text
-  const fp=sh.fuel/CONFIG.fuelMax;
-  const now_ms=Date.now();
+  // ---- Cockpit instrument panel ----
+  // Each directional instrument: compass needle (direction) + bar (magnitude)
+  // HDG: compass only. FUEL: bar only. SPD/GRAV/ACCEL: compass + bar.
+  const CR=12;          // compass radius
+  const GX=74;          // bar left edge (leaves room for compass + label)
+  const CX=GX-CR-10;   // compass center X = 52
+  const GW=188;         // bar width
+  const GH=14;          // bar height
+  const GY=22;          // FUEL bar top
+  const GT=GY+GH+34;   // gauge group top (clears fuel+laser+emtank) = 70
+  const GSTEP=32;       // row pitch — must be > 2*CR+gap = 28
+  const fx=22;          // objectives left anchor
 
+  const now_ms=Date.now();
+  const fp=sh.fuel/CONFIG.fuelMax;
   const blinkSlow=Math.floor(now_ms/500)%2===0;
   const blinkFast=Math.floor(now_ms/165)%2===0;
   const isLow=fp<0.10, isCritical=fp<0.03, isAlarm=fp<0.01;
   const barVisible=isCritical?blinkFast:(isLow?blinkSlow:true);
 
   let fc;
-  if(isCritical)    fc='#ff2233';
-  else if(isLow)    fc='#ffdd00';
-  else if(fp>0.50)  fc='#22ffbb';
-  else if(fp>0.25)  fc='#ffaa00';
-  else              fc=C_WARN;
+  if(isCritical)   fc='#ff2233';
+  else if(isLow)   fc='#ffdd00';
+  else if(fp>0.50) fc='#22ffbb';
+  else if(fp>0.25) fc='#ffaa00';
+  else             fc=C_WARN;
 
-  // --- Physics quantities ---
+  // Physics quantities
   const g=gravAt(sh.x,sh.y);
   const gMag=Math.hypot(g.ax,g.ay);
   const gravG=gMag/50;
   const gravFrac=Math.min(1,gravG/10);
-  const gravDirDeg=gMag>=0.5?Math.round(((Math.atan2(g.ax,-g.ay)*180/Math.PI)%360+360)%360):null;
-
   const boosting=keys.ShiftLeft||keys.ShiftRight;
   const tAmtHud=(keys.KeyW||keys.ArrowUp)?1:(keys.KeyS||keys.ArrowDown)?-0.4:0;
   const thrustG=sh.fuel>0&&tAmtHud!==0?THRUST*(boosting?BOOST_MULT:1)*Math.abs(tAmtHud)/50:0;
   const accelFrac=Math.min(1,thrustG/6);
-
   const spdMag=Math.hypot(sh.vx,sh.vy);
   const spdFrac=Math.min(1,spdMag/800);
   const spdCol=spdFrac>0.65?'#ff3344':spdFrac>0.35?'#ffaa00':'#22ffbb';
-
   const headingDeg=Math.round(((sh.angle*180/Math.PI)%360+360)%360);
 
-  // FUEL gauge (manual — needs blink logic)
+  // Compass angles (0=up, CW positive — matches ship angle convention)
+  const spdAngle = spdMag>1 ? Math.atan2(sh.vx,-sh.vy) : null;
+  const gravAngle= gMag>=0.5 ? Math.atan2(g.ax,-g.ay)  : null;
+  const accelAngle=tAmtHud!==0 ? (tAmtHud>0?sh.angle:sh.angle+Math.PI) : null;
+
+  // Dark backing panel — prevents world bleedthrough
+  ctx.fillStyle='rgba(3,7,16,0.80)';
+  ctx.fillRect(0, 0, GX+GW+94, GT+GSTEP*3+GH+30);
+
+  // ---- FUEL bar (no compass — non-directional) ----
   ctx.fillStyle='#0a0f1a'; ctx.fillRect(GX,GY,GW,GH);
   if(barVisible){ctx.fillStyle=fc; ctx.fillRect(GX,GY,GW*fp,GH);}
   ctx.strokeStyle=isLow?fc:'#1a3355'; ctx.lineWidth=1; ctx.strokeRect(GX,GY,GW,GH);
-  ctx.fillStyle='#4a6a8a'; ctx.font=fnt(12); ctx.textAlign='right';
+  ctx.fillStyle='#3a5a7a'; ctx.font=fnt(12); ctx.textAlign='right';
   ctx.fillText('FUEL', GX-6, GY+GH-1);
   ctx.fillStyle=fc; ctx.textAlign='left';
   ctx.fillText(`${Math.floor(fp*100)}%`, GX+GW+8, GY+GH-1);
@@ -2194,7 +2230,7 @@ function renderHUD(){
   }
   ctx.textAlign='left';
 
-  // Laser cooldown — thin bar directly below FUEL
+  // Laser cooldown thin bar
   const laserBarY=GY+GH+3;
   if(sh.laserCooldown>0){
     const lp=sh.laserCooldown/LASER_COOL;
@@ -2203,56 +2239,57 @@ function renderHUD(){
     ctx.strokeStyle='#0a2a22'; ctx.lineWidth=1; ctx.strokeRect(GX,laserBarY,GW,5);
   }
 
-  // Emergency tank indicator — small text below laser bar
-  const emY=GY+GH+14;
+  // Emergency tank text
   if(S.extraFuelReady){
     const pulse=0.7+0.3*Math.sin(now_ms/400);
     ctx.fillStyle=`rgba(80,255,160,${pulse})`; ctx.font=fnt(11); ctx.textAlign='right';
-    ctx.fillText('F · EMERGENCY TANK', GX-6, emY);
+    ctx.fillText('F · EMERGENCY TANK', GX-6, GY+GH+17);
   } else {
-    ctx.fillStyle='#1a2a3a'; ctx.font=fnt(11); ctx.textAlign='right';
-    ctx.fillText('F · tank used', GX-6, emY);
+    ctx.fillStyle='#1e2e3e'; ctx.font=fnt(11); ctx.textAlign='right';
+    ctx.fillText('F · used', GX-6, GY+GH+17);
   }
   ctx.textAlign='left';
 
-  // SPD gauge
-  drawGauge('SPD', GY+GSTEP, spdFrac, spdCol,
+  // ---- HDG — compass only ----
+  const hdgCY=GT+GH/2;
+  drawCompass(CX, hdgCY, CR, sh.angle, C_VALUE, true);
+  ctx.fillStyle=C_VALUE; ctx.font=fnt(12);
+  ctx.fillText(`HDG  ${String(headingDeg).padStart(3,'0')}°`, GX, hdgCY+4);
+
+  // ---- SPD — compass + bar ----
+  const spdRowY=GT+GSTEP;
+  drawCompass(CX, spdRowY+GH/2, CR, spdAngle??0, spdCol, spdAngle!==null);
+  drawGauge('SPD', GX-6, GX, spdRowY, GW, GH, spdFrac, spdCol,
     sh.fuel<=0&&sh.zeroFuelTimer>0
       ? `DRIFT ${Math.ceil(DEAD_DRIFT-sh.zeroFuelTimer)}s`
       : spdMag.toFixed(0));
 
-  // GRAV gauge — net gravitational acceleration
-  const gravValStr=gravG>=0.05
-    ? `${gravG.toFixed(2)}g${gravDirDeg!=null?' →'+String(gravDirDeg).padStart(3,'0')+'°':''}`
-    : null;
-  drawGauge('GRAV', GY+GSTEP*2, gravFrac, '#ffc844', gravValStr);
+  // ---- GRAV — compass + bar ----
+  const gravRowY=GT+GSTEP*2;
+  drawCompass(CX, gravRowY+GH/2, CR, gravAngle??0, '#ffc844', gravAngle!==null);
+  drawGauge('GRAV', GX-6, GX, gravRowY, GW, GH, gravFrac, '#ffc844',
+    gravG>=0.05?`${gravG.toFixed(2)}g`:null);
 
-  // ACCEL gauge — thrust acceleration only (not gravity)
-  const accelValStr=thrustG>=0.05
-    ? `${thrustG.toFixed(2)}g ${tAmtHud>0?'↑':'↓'}`
-    : null;
-  drawGauge('ACCEL', GY+GSTEP*3, accelFrac, '#00dcff', accelValStr);
+  // ---- ACCEL — compass + bar ----
+  const accelRowY=GT+GSTEP*3;
+  drawCompass(CX, accelRowY+GH/2, CR, accelAngle??0, '#00dcff', accelAngle!==null);
+  drawGauge('ACCEL', GX-6, GX, accelRowY, GW, GH, accelFrac, '#00dcff',
+    thrustG>=0.05?`${thrustG.toFixed(2)}g ${tAmtHud>0?'↑':'↓'}`:null);
 
-  // HDG text
-  ctx.fillStyle=C_VALUE; ctx.font=fnt(14);
-  ctx.fillText(`HDG  ${String(headingDeg).padStart(3,'0')}°`, GX, GY+GSTEP*4+GH);
-
-  // Cheat mode: relative grav bearing
+  // Cheat mode: grav bearing
   let gravHudH=0;
   if(S.cheat&&gMag>=0.5){
     const fwdX=Math.sin(sh.angle),fwdY=-Math.cos(sh.angle);
     const gnx=g.ax/gMag,gny=g.ay/gMag;
-    const cross=fwdX*gny-fwdY*gnx;
-    const dot=fwdX*gnx+fwdY*gny;
+    const cross=fwdX*gny-fwdY*gnx, dot=fwdX*gnx+fwdY*gny;
     const bearDeg=Math.round(Math.atan2(cross,dot)*180/Math.PI);
     const bearStr=bearDeg===0?'fwd':Math.abs(bearDeg)>=175?'aft':`${Math.abs(bearDeg)}° ${cross>=0?'R':'L'}`;
     ctx.fillStyle=C_LABEL; ctx.font=fnt(12);
-    ctx.fillText(`GRAV bearing  ${bearStr}`, GX, GY+GSTEP*4+GH+16);
+    ctx.fillText(`GRAV bearing  ${bearStr}`, GX, accelRowY+GH+16);
     gravHudH=18;
   }
 
-  // statY — base y for objectives list below the gauge stack
-  const statY=GY+GSTEP*4+GH+6;
+  const statY=GT+GSTEP*3+GH+6;
 
   // Fuel bonus popups — large floating text at ship position
   ctx.textAlign='center';
