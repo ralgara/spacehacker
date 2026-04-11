@@ -797,7 +797,9 @@ function genObjectives(planetIdxs,asteroidIdxs){
   for(const type of secPool){
     if(S.objectives.length>=1+wantSec) break;
     if(type==='mine'){
-      const ai=asteroidIdxs[ri(0,asteroidIdxs.length)];
+      const mineableIdxs=asteroidIdxs.filter(i=>{const b=S.bodies[i];const gv=gravAt(b.x,b.y);return Math.hypot(gv.ax,gv.ay)<THRUST*0.8;});
+      if(mineableIdxs.length===0) continue;
+      const ai=mineableIdxs[ri(0,mineableIdxs.length)];
       const ab=S.bodies[ai];
       ab.isMining=true; ab.vx=rn(-35,35); ab.vy=rn(-35,35); ab.desig=genAstDesig();
       const mRisk=riskMult(ab.x,ab.y);
@@ -1257,8 +1259,9 @@ function appendObjectives(){
     fuelReward:Math.round(180*CONFIG.refuelMult*spRisk),color:'#00ffcc'});
 
   if(tier>=2){
-    if(asteroidIdxs.length>0&&nr()>0.4){
-      const ai=asteroidIdxs[ri(0,asteroidIdxs.length)];
+    const mineableIdxs2=asteroidIdxs.filter(i=>{const b=S.bodies[i];const gv=gravAt(b.x,b.y);return Math.hypot(gv.ax,gv.ay)<THRUST*0.8;});
+    if(mineableIdxs2.length>0&&nr()>0.4){
+      const ai=mineableIdxs2[ri(0,mineableIdxs2.length)];
       const ab=S.bodies[ai];
       ab.isMining=true; ab.vx=rn(-35,35); ab.vy=rn(-35,35);
       const mRisk=riskMult(ab.x,ab.y);
