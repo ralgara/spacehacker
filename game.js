@@ -605,7 +605,7 @@ function initState() {
     laserFired:false,
     closestApproachFrac:Infinity,
     achievements:[],
-    narText:'',narTimer:0,narLaserTimer:0,narKey:'',
+    narText:'',narTimer:0,narLaserTimer:0,narKey:'',narHoldTimer:0,
   };
 }
 
@@ -969,12 +969,20 @@ function updateNarrative(dt){
   const urgent=key==='fuel_crit'||key==='edge'||key.startsWith('approach_')||key==='grav_high';
   const interval=urgent ? 2.5+Math.random() : 9.0+Math.random()*4.0;
 
+  if(S.narHoldTimer>0) S.narHoldTimer-=dt;
+
   if(key!==S.narKey){
-    // Situation changed — update immediately, reset timer
-    S.narKey=key;
-    S.narTimer=interval;
-    const pool=_NAR[key]||_NAR.coast;
-    S.narText=pool[Math.floor(Math.random()*pool.length)];
+    // Bypass hold timer only for truly critical states
+    const bypass=key==='fuel_crit'||key==='edge';
+    if(!bypass&&S.narHoldTimer>0){
+      // Hold — don't switch yet
+    } else {
+      S.narKey=key;
+      S.narTimer=interval;
+      S.narHoldTimer=2.2;
+      const pool=_NAR[key]||_NAR.coast;
+      S.narText=pool[Math.floor(Math.random()*pool.length)];
+    }
   } else if(S.narTimer<=0){
     // Same situation, interval elapsed — rotate to a new phrase
     S.narTimer=interval;
@@ -2175,137 +2183,18 @@ function renderHUD(){
   const cw=canvas.width,ch=canvas.height;
   const sh=S.ship;
 
-  // ---- Cockpit instrument panel ----
-  // Each directional instrument: compass needle (direction) + bar (magnitude)
-  // HDG: compass only. FUEL: bar only. SPD/GRAV/ACCEL: compass + bar.
-  const CR=12;          // compass radius
-  const GX=74;          // bar left edge (leaves room for compass + label)
-  const CX=GX-CR-10;   // compass center X = 52
-  const GW=188;         // bar width
-  const GH=14;          // bar height
-  const GY=22;          // FUEL bar top
-  const GT=GY+GH+34;   // gauge group top (clears fuel+laser+emtank) = 70
-  const GSTEP=32;       // row pitch — must be > 2*CR+gap = 28
-  const fx=22;          // objectives left anchor
-
+  // Shared state used by popups + screen pulse below
   const now_ms=Date.now();
   const fp=sh.fuel/CONFIG.fuelMax;
-  const blinkSlow=Math.floor(now_ms/500)%2===0;
   const blinkFast=Math.floor(now_ms/165)%2===0;
-  const isLow=fp<0.10, isCritical=fp<0.03, isAlarm=fp<0.01;
-  const barVisible=isCritical?blinkFast:(isLow?blinkSlow:true);
-
-  let fc;
-  if(isCritical)   fc='#ff2233';
-  else if(isLow)   fc='#ffdd00';
-  else if(fp>0.50) fc='#22ffbb';
-  else if(fp>0.25) fc='#ffaa00';
-  else             fc=C_WARN;
-
-  // Physics quantities
-  const g=gravAt(sh.x,sh.y);
-  const gMag=Math.hypot(g.ax,g.ay);
-  const gravG=gMag/50;
-  const gravFrac=Math.min(1,gravG/10);
-  const boosting=keys.ShiftLeft||keys.ShiftRight;
-  const tAmtHud=(keys.KeyW||keys.ArrowUp)?1:(keys.KeyS||keys.ArrowDown)?-0.4:0;
-  const thrustG=sh.fuel>0&&tAmtHud!==0?THRUST*(boosting?BOOST_MULT:1)*Math.abs(tAmtHud)/50:0;
-  const accelFrac=Math.min(1,thrustG/6);
-  const spdMag=Math.hypot(sh.vx,sh.vy);
-  const spdFrac=Math.min(1,spdMag/800);
-  const spdCol=spdFrac>0.65?'#ff3344':spdFrac>0.35?'#ffaa00':'#22ffbb';
-  const headingDeg=Math.round(((sh.angle*180/Math.PI)%360+360)%360);
-
-  // Compass angles (0=up, CW positive — matches ship angle convention)
-  const spdAngle = spdMag>1 ? Math.atan2(sh.vx,-sh.vy) : null;
-  const gravAngle= gMag>=0.5 ? Math.atan2(g.ax,-g.ay)  : null;
-  const accelAngle=tAmtHud!==0 ? (tAmtHud>0?sh.angle:sh.angle+Math.PI) : null;
-
-  // Dark backing panel — prevents world bleedthrough
-  ctx.fillStyle='rgba(3,7,16,0.80)';
-  ctx.fillRect(0, 0, GX+GW+94, GT+GSTEP*3+GH+30);
-
-  // ---- FUEL bar (no compass — non-directional) ----
-  ctx.fillStyle='#0a0f1a'; ctx.fillRect(GX,GY,GW,GH);
-  if(barVisible){ctx.fillStyle=fc; ctx.fillRect(GX,GY,GW*fp,GH);}
-  ctx.strokeStyle=isLow?fc:'#1a3355'; ctx.lineWidth=1; ctx.strokeRect(GX,GY,GW,GH);
-  ctx.fillStyle='#3a5a7a'; ctx.font=fnt(12); ctx.textAlign='right';
-  ctx.fillText('FUEL', GX-6, GY+GH-1);
-  ctx.fillStyle=fc; ctx.textAlign='left';
-  ctx.fillText(`${Math.floor(fp*100)}%`, GX+GW+8, GY+GH-1);
-  if(isAlarm){
-    ctx.fillStyle=`rgba(255,30,40,${blinkFast?1:0.4})`;
-    ctx.font='bold '+fnt(10); ctx.textAlign='center';
-    ctx.fillText('CRITICAL', GX+GW/2, GY+GH-2);
-  }
-  ctx.textAlign='left';
-
-  // Laser cooldown thin bar
-  const laserBarY=GY+GH+3;
-  if(sh.laserCooldown>0){
-    const lp=sh.laserCooldown/LASER_COOL;
-    ctx.fillStyle='#071410'; ctx.fillRect(GX,laserBarY,GW,5);
-    ctx.fillStyle=`rgba(0,255,180,${0.6-lp*0.2})`; ctx.fillRect(GX,laserBarY,GW*(1-lp),5);
-    ctx.strokeStyle='#0a2a22'; ctx.lineWidth=1; ctx.strokeRect(GX,laserBarY,GW,5);
-  }
-
-  // Emergency tank text — left-aligned below laser bar
-  ctx.font=fnt(11); ctx.textAlign='left';
-  if(S.extraFuelReady){
-    const pulse=0.7+0.3*Math.sin(now_ms/400);
-    ctx.fillStyle=`rgba(80,255,160,${pulse})`;
-    ctx.fillText('F · EMERGENCY TANK', fx, GY+GH+17);
-  } else {
-    ctx.fillStyle='#1e2e3e';
-    ctx.fillText('F · tank used', fx, GY+GH+17);
-  }
-
-  // ---- HDG — compass only ----
-  const hdgCY=GT+GH/2;
-  drawCompass(CX, hdgCY, CR, sh.angle, C_VALUE, true);
-  ctx.fillStyle=C_VALUE; ctx.font=fnt(12);
-  ctx.fillText(`HDG  ${String(headingDeg).padStart(3,'0')}°`, GX, hdgCY+4);
-
-  // ---- SPD — compass + bar ----
-  const spdRowY=GT+GSTEP;
-  drawCompass(CX, spdRowY+GH/2, CR, spdAngle??0, spdCol, spdAngle!==null);
-  drawGauge('SPD', GX-6, GX, spdRowY, GW, GH, spdFrac, spdCol,
-    sh.fuel<=0&&sh.zeroFuelTimer>0
-      ? `DRIFT ${Math.ceil(DEAD_DRIFT-sh.zeroFuelTimer)}s`
-      : spdMag.toFixed(0));
-
-  // ---- GRAV — compass + bar ----
-  const gravRowY=GT+GSTEP*2;
-  drawCompass(CX, gravRowY+GH/2, CR, gravAngle??0, '#ffc844', gravAngle!==null);
-  drawGauge('GRAV', GX-6, GX, gravRowY, GW, GH, gravFrac, '#ffc844',
-    gravG>=0.05?`${gravG.toFixed(2)}g`:null);
-
-  // ---- ACCEL — compass + bar ----
-  const accelRowY=GT+GSTEP*3;
-  drawCompass(CX, accelRowY+GH/2, CR, accelAngle??0, '#00dcff', accelAngle!==null);
-  drawGauge('ACCEL', GX-6, GX, accelRowY, GW, GH, accelFrac, '#00dcff',
-    thrustG>=0.05?`${thrustG.toFixed(2)}g ${tAmtHud>0?'↑':'↓'}`:null);
-
-  // Cheat mode: grav bearing
-  let gravHudH=0;
-  if(S.cheat&&gMag>=0.5){
-    const fwdX=Math.sin(sh.angle),fwdY=-Math.cos(sh.angle);
-    const gnx=g.ax/gMag,gny=g.ay/gMag;
-    const cross=fwdX*gny-fwdY*gnx, dot=fwdX*gnx+fwdY*gny;
-    const bearDeg=Math.round(Math.atan2(cross,dot)*180/Math.PI);
-    const bearStr=bearDeg===0?'fwd':Math.abs(bearDeg)>=175?'aft':`${Math.abs(bearDeg)}° ${cross>=0?'R':'L'}`;
-    ctx.fillStyle=C_LABEL; ctx.font=fnt(12);
-    ctx.fillText(`GRAV bearing  ${bearStr}`, GX, accelRowY+GH+16);
-    gravHudH=18;
-  }
-
-  const statY=GT+GSTEP*3+GH+6;
+  const isCritical=fp<0.03, isAlarm=fp<0.01;
+  const fx=22; // objectives left anchor
 
   // Fuel bonus popups — large floating text at ship position
   ctx.textAlign='center';
   for(const p of S.fuelPopups){
-    const sx=p.wx!=null ? w2s(p.wx,p.wy).x : GX+GW/2;
-    const sy=p.wx!=null ? w2s(p.wx,p.wy).y-p.dy*2.5-50 : GY-12-p.dy;
+    const sx=p.wx!=null ? w2s(p.wx,p.wy).x : cw/2;
+    const sy=p.wx!=null ? w2s(p.wx,p.wy).y-p.dy*2.5-50 : 60-p.dy;
     ctx.globalAlpha=p.alpha;
     ctx.shadowColor='rgba(60,255,150,0.9)'; ctx.shadowBlur=16;
     ctx.fillStyle='#55ffbb';
@@ -2371,7 +2260,7 @@ function renderHUD(){
 
   // ---- Objectives ----
   ctx.font=fnt(30);
-  const oy=statY+36+gravHudH;
+  const oy=26;
   for(let i=0;i<S.objectives.length;i++){
     const obj=S.objectives[i];
     ctx.fillStyle=obj.complete?C_GOOD:obj.color;
@@ -2431,11 +2320,210 @@ function renderHUD(){
     ctx.textAlign='left';
   }
 
-  // Bottom two rows — color-coded toggles
-  const ver = window.GAME_VER || 'dev';
-  const gravModeLabel = CONFIG.gravMode==='off'?'off':CONFIG.gravMode;
-  ctx.font=fnt(20); ctx.textAlign='left';
+  renderBottomPanel();
+  if(S.showMinimap) renderMinimap();
+}
+
+function renderBottomPanel(){
+  const cw=canvas.width, ch=canvas.height;
+  const sh=S.ship;
+  const now_ms=Date.now();
+
+  // Layout constants
+  const CR=52;                   // compass radius
+  const GAUGE_CY=ch-126;         // compass center Y
+  const FUEL_Y=ch-60;            // fuel bar top
+  const FUEL_H=8;
+  const PANEL_TOP=ch-192;
+  const G1X=Math.round(cw*0.18); // GRAV compass
+  const G2X=Math.round(cw*0.50); // SPD+HDG compass
+  const G3X=Math.round(cw*0.82); // ACCEL+THRUST compass
+
+  // Colors
   const HON='#22ffbb', HOFF='#ff4444', HWARN='#ffcc44';
+  const C_LED_OFF='#1a2a1a';
+
+  // Dark backing panel
+  ctx.fillStyle='rgba(3,7,16,0.82)';
+  ctx.fillRect(0, PANEL_TOP, cw, ch-PANEL_TOP);
+
+  // thin top border line
+  ctx.strokeStyle='#1e3354'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(0,PANEL_TOP); ctx.lineTo(cw,PANEL_TOP); ctx.stroke();
+
+  if(!sh||!sh.alive){
+    // Minimal panel when dead — still show help text
+    _drawHelpRows(cw,ch,HON,HOFF,HWARN);
+    return;
+  }
+
+  // ---- Physics values ----
+  const g=gravAt(sh.x,sh.y);
+  const gravMag=Math.hypot(g.ax,g.ay);         // units/s²
+  const gravG=gravMag/50;                       // in "g"
+  const gravAngle=Math.atan2(g.ax,-g.ay);       // compass angle (north=up)
+
+  const spdMag=Math.hypot(sh.vx,sh.vy);
+  const spdAngle=spdMag>0.5?Math.atan2(sh.vx,-sh.vy):sh.angle;
+  const hdgAngle=sh.angle;
+
+  const isThrusting=sh.thrusting&&sh.fuel>0;
+  const isBoosting=keys.ShiftLeft||keys.ShiftRight;
+  const thr=THRUST*(isBoosting?BOOST_MULT:1);
+  const thrDir=sh.thrustDir||1;
+  const thrX=isThrusting?Math.sin(sh.angle)*thr*thrDir:0;
+  const thrY=isThrusting?-Math.cos(sh.angle)*thr*thrDir:0;
+  const thrAngle=sh.angle+(thrDir<0?Math.PI:0);
+  const netAX=g.ax+thrX, netAY=g.ay+thrY;
+  const netMag=Math.hypot(netAX,netAY);
+  const netAngle=netMag>0.5?Math.atan2(netAX,-netAY):gravAngle;
+
+  const fp=sh.fuel/CONFIG.fuelMax;
+  const blinkFast=Math.floor(now_ms/165)%2===0;
+  const isCritical=fp<0.03, isAlarm=fp<0.01;
+
+  // ----------------------------------------------------------------
+  // Helper: dual-needle compass
+  // ----------------------------------------------------------------
+  function drawDualCompass(cx,cy,r,a1,c1,a2,c2,a2active){
+    // Background + ring
+    ctx.fillStyle='rgba(3,7,16,0.92)';
+    ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle='#1e3354'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.stroke();
+    // 12-o'clock tick
+    ctx.save(); ctx.globalAlpha=0.3; ctx.strokeStyle=c1; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(cx,cy-r+2); ctx.lineTo(cx,cy-r+6); ctx.stroke(); ctx.restore();
+    // Needle 1 — primary (shorter, underneath)
+    const n1x=Math.sin(a1), n1y=-Math.cos(a1);
+    const tip1={x:cx+n1x*r*0.72, y:cy+n1y*r*0.72};
+    const tail1={x:cx-n1x*r*0.22, y:cy-n1y*r*0.22};
+    ctx.strokeStyle=c1; ctx.lineWidth=1.5; ctx.globalAlpha=0.55;
+    ctx.beginPath(); ctx.moveTo(tail1.x,tail1.y); ctx.lineTo(tip1.x,tip1.y); ctx.stroke();
+    ctx.globalAlpha=0.55;
+    const a1a=Math.atan2(n1y,n1x), as1=4;
+    ctx.fillStyle=c1; ctx.beginPath();
+    ctx.moveTo(tip1.x,tip1.y);
+    ctx.lineTo(tip1.x-as1*Math.cos(a1a-0.45),tip1.y-as1*Math.sin(a1a-0.45));
+    ctx.lineTo(tip1.x-as1*Math.cos(a1a+0.45),tip1.y-as1*Math.sin(a1a+0.45));
+    ctx.closePath(); ctx.fill(); ctx.globalAlpha=1;
+    // Needle 2 — secondary (longer, on top)
+    if(a2active){
+      const n2x=Math.sin(a2), n2y=-Math.cos(a2);
+      const tip2={x:cx+n2x*r*0.82, y:cy+n2y*r*0.82};
+      const tail2={x:cx-n2x*r*0.28, y:cy-n2y*r*0.28};
+      ctx.strokeStyle=c2; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.moveTo(tail2.x,tail2.y); ctx.lineTo(tip2.x,tip2.y); ctx.stroke();
+      const a2a=Math.atan2(n2y,n2x), as2=5;
+      ctx.fillStyle=c2; ctx.beginPath();
+      ctx.moveTo(tip2.x,tip2.y);
+      ctx.lineTo(tip2.x-as2*Math.cos(a2a-0.45),tip2.y-as2*Math.sin(a2a-0.45));
+      ctx.lineTo(tip2.x-as2*Math.cos(a2a+0.45),tip2.y-as2*Math.sin(a2a+0.45));
+      ctx.closePath(); ctx.fill();
+    }
+  }
+
+  // Helper: LED alarm dot
+  function drawLED(x,y,color,lit){
+    ctx.beginPath(); ctx.arc(x,y,5,0,Math.PI*2);
+    ctx.fillStyle=lit?color:C_LED_OFF; ctx.fill();
+    if(lit){ctx.strokeStyle=color; ctx.lineWidth=1; ctx.globalAlpha=0.5;
+      ctx.beginPath(); ctx.arc(x,y,7,0,Math.PI*2); ctx.stroke(); ctx.globalAlpha=1;}
+  }
+
+  // ----------------------------------------------------------------
+  // Gauge 1 — GRAV
+  // ----------------------------------------------------------------
+  drawCompass(G1X, GAUGE_CY, CR, gravAngle, '#ff8844', true);
+  // LEDs: yellow >2g, red >5g
+  drawLED(G1X+CR-6, GAUGE_CY-CR+6, HWARN, gravG>2);
+  drawLED(G1X+CR+6, GAUGE_CY-CR+6, HOFF,  gravG>5);
+  ctx.fillStyle='#5a7a9a'; ctx.font=fnt(13); ctx.textAlign='center';
+  ctx.fillText('GRAV', G1X, GAUGE_CY+CR+16);
+  ctx.fillStyle='#ff8844'; ctx.font='bold '+fnt(14);
+  ctx.fillText(`${gravG.toFixed(2)} g`, G1X, GAUGE_CY+CR+30);
+  ctx.textAlign='left';
+
+  // ----------------------------------------------------------------
+  // Gauge 2 — SPD + HDG
+  // ----------------------------------------------------------------
+  // Needle 1: heading (dim teal), Needle 2: velocity direction (bright cyan)
+  drawDualCompass(G2X, GAUGE_CY, CR, hdgAngle, '#2299bb', spdAngle, HON, spdMag>0.5);
+  // LED: yellow >400, red >700
+  drawLED(G2X+CR-6, GAUGE_CY-CR+6, HWARN, spdMag>400);
+  drawLED(G2X+CR+6, GAUGE_CY-CR+6, HOFF,  spdMag>700);
+  ctx.fillStyle='#5a7a9a'; ctx.font=fnt(13); ctx.textAlign='center';
+  ctx.fillText('SPD · HDG', G2X, GAUGE_CY+CR+16);
+  ctx.fillStyle=HON; ctx.font='bold '+fnt(14);
+  ctx.fillText(`${spdMag.toFixed(0)} m/s`, G2X, GAUGE_CY+CR+30);
+  ctx.textAlign='left';
+
+  // ----------------------------------------------------------------
+  // Gauge 3 — ACCEL + THRUST
+  // ----------------------------------------------------------------
+  // Needle 1: net accel (dim orange), Needle 2: thrust direction (bright if thrusting)
+  drawDualCompass(G3X, GAUGE_CY, CR, netAngle, '#cc6622', thrAngle, '#ffcc44', isThrusting);
+  const netG=netMag/50;
+  drawLED(G3X+CR-6, GAUGE_CY-CR+6, HWARN, netG>3);
+  drawLED(G3X+CR+6, GAUGE_CY-CR+6, HOFF,  netG>7);
+  ctx.fillStyle='#5a7a9a'; ctx.font=fnt(13); ctx.textAlign='center';
+  ctx.fillText('ACCEL · THR', G3X, GAUGE_CY+CR+16);
+  ctx.fillStyle='#cc8844'; ctx.font='bold '+fnt(14);
+  ctx.fillText(`${netG.toFixed(2)} g`, G3X, GAUGE_CY+CR+30);
+  ctx.textAlign='left';
+
+  // ----------------------------------------------------------------
+  // Fuel bar
+  // ----------------------------------------------------------------
+  const FUEL_BAR_X=Math.round(cw*0.25), FUEL_BAR_W=Math.round(cw*0.50);
+  const fuelColor=fp>0.5?'#22bb66':fp>0.2?'#aacc22':fp>0.1?'#ffaa00':'#ff3322';
+  // bar background
+  ctx.fillStyle='#0a0f1a'; ctx.fillRect(FUEL_BAR_X,FUEL_Y,FUEL_BAR_W,FUEL_H);
+  // fill
+  if(fp>0){
+    ctx.fillStyle=fuelColor;
+    ctx.fillRect(FUEL_BAR_X,FUEL_Y,FUEL_BAR_W*Math.min(1,fp),FUEL_H);
+  }
+  ctx.strokeStyle='#1a3355'; ctx.lineWidth=1; ctx.strokeRect(FUEL_BAR_X,FUEL_Y,FUEL_BAR_W,FUEL_H);
+  // FUEL label
+  ctx.fillStyle='#3a5a7a'; ctx.font=fnt(12); ctx.textAlign='right';
+  ctx.fillText('FUEL', FUEL_BAR_X-6, FUEL_Y+FUEL_H-1);
+  // percentage
+  ctx.fillStyle=fuelColor; ctx.textAlign='left';
+  ctx.fillText(`${(fp*100).toFixed(0)}%`, FUEL_BAR_X+FUEL_BAR_W+6, FUEL_Y+FUEL_H-1);
+  ctx.textAlign='left';
+  // Critical LED alarm
+  if(isCritical){
+    const ledBlink=isAlarm?blinkFast:true;
+    drawLED(FUEL_BAR_X-22, FUEL_Y+FUEL_H/2+1, HOFF, ledBlink);
+  }
+  // Emergency tank indicator
+  if(S.extraFuelReady){
+    ctx.fillStyle='#ffcc44'; ctx.font=fnt(12); ctx.textAlign='right';
+    ctx.fillText('F · EMERGENCY TANK', FUEL_BAR_X-32, FUEL_Y+FUEL_H-1);
+    ctx.textAlign='left';
+  }
+
+  // Laser cooldown bar (above fuel bar, thin 3px)
+  if(sh.laserCooldown>0){
+    const LCD_Y=FUEL_Y-6, LCD_H=3;
+    const lcFrac=clamp(sh.laserCooldown/LASER_COOL,0,1);
+    ctx.fillStyle='#0a0f1a'; ctx.fillRect(FUEL_BAR_X,LCD_Y,FUEL_BAR_W,LCD_H);
+    ctx.fillStyle='#5599ff';
+    ctx.fillRect(FUEL_BAR_X,LCD_Y,FUEL_BAR_W*(1-lcFrac),LCD_H);
+    ctx.strokeStyle='#1a3355'; ctx.lineWidth=1; ctx.strokeRect(FUEL_BAR_X,LCD_Y,FUEL_BAR_W,LCD_H);
+  }
+
+  // ----------------------------------------------------------------
+  // Help text rows
+  // ----------------------------------------------------------------
+  _drawHelpRows(cw,ch,HON,HOFF,HWARN);
+}
+
+function _drawHelpRows(cw,ch,HON,HOFF,HWARN){
+  const ver=window.GAME_VER||'dev';
+  const gravModeLabel=CONFIG.gravMode==='off'?'off':CONFIG.gravMode;
+  ctx.font=fnt(20); ctx.textAlign='left';
   const tok=(text,color,x,y)=>{ctx.fillStyle=color;ctx.fillText(text,x,y);return x+ctx.measureText(text).width;};
 
   let hx=22;
@@ -2456,8 +2544,6 @@ function renderHUD(){
   ctx.fillText(`×${S.cam.zoom.toFixed(2)}`,cw-16,ch-16);
   if(CONFIG.showFPS){ctx.fillText(`${_fps} fps`,cw-16,ch-38);}
   ctx.textAlign='left';
-
-  if(S.showMinimap) renderMinimap();
 }
 
 function drawArrow(wx,wy,color){
