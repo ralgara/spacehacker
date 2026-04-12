@@ -2328,40 +2328,15 @@ function renderBottomPanel(){
   const cw=canvas.width, ch=canvas.height;
   const sh=S.ship;
   const now_ms=Date.now();
-
-  // Layout constants
-  const CR=52;                   // compass radius
-  const GAUGE_CY=ch-126;         // compass center Y
-  const FUEL_Y=ch-60;            // fuel bar top
-  const FUEL_H=8;
-  const PANEL_TOP=ch-192;
-  const G1X=Math.round(cw*0.18); // GRAV compass
-  const G2X=Math.round(cw*0.50); // SPD+HDG compass
-  const G3X=Math.round(cw*0.82); // ACCEL+THRUST compass
-
-  // Colors
   const HON='#22ffbb', HOFF='#ff4444', HWARN='#ffcc44';
-  const C_LED_OFF='#1a2a1a';
 
-  // Dark backing panel
-  ctx.fillStyle='rgba(3,7,16,0.82)';
-  ctx.fillRect(0, PANEL_TOP, cw, ch-PANEL_TOP);
+  if(!sh||!sh.alive){ _drawHelpRows(cw,ch,HON,HOFF,HWARN); return; }
 
-  // thin top border line
-  ctx.strokeStyle='#1e3354'; ctx.lineWidth=1;
-  ctx.beginPath(); ctx.moveTo(0,PANEL_TOP); ctx.lineTo(cw,PANEL_TOP); ctx.stroke();
-
-  if(!sh||!sh.alive){
-    // Minimal panel when dead — still show help text
-    _drawHelpRows(cw,ch,HON,HOFF,HWARN);
-    return;
-  }
-
-  // ---- Physics values ----
+  // ---- Physics ----
   const g=gravAt(sh.x,sh.y);
-  const gravMag=Math.hypot(g.ax,g.ay);         // units/s²
-  const gravG=gravMag/50;                       // in "g"
-  const gravAngle=Math.atan2(g.ax,-g.ay);       // compass angle (north=up)
+  const gravMag=Math.hypot(g.ax,g.ay);
+  const gravG=gravMag/50;
+  const gravAngle=Math.atan2(g.ax,-g.ay);
 
   const spdMag=Math.hypot(sh.vx,sh.vy);
   const spdAngle=spdMag>0.5?Math.atan2(sh.vx,-sh.vy):sh.angle;
@@ -2377,146 +2352,161 @@ function renderBottomPanel(){
   const netAX=g.ax+thrX, netAY=g.ay+thrY;
   const netMag=Math.hypot(netAX,netAY);
   const netAngle=netMag>0.5?Math.atan2(netAX,-netAY):gravAngle;
+  const netG=netMag/50;
 
   const fp=sh.fuel/CONFIG.fuelMax;
   const blinkFast=Math.floor(now_ms/165)%2===0;
   const isCritical=fp<0.03, isAlarm=fp<0.01;
 
-  // ----------------------------------------------------------------
-  // Helper: dual-needle compass
-  // ----------------------------------------------------------------
-  function drawDualCompass(cx,cy,r,a1,c1,a2,c2,a2active){
-    // Background + ring
-    ctx.fillStyle='rgba(3,7,16,0.92)';
-    ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.fill();
-    ctx.strokeStyle='#1e3354'; ctx.lineWidth=1;
-    ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.stroke();
-    // 12-o'clock tick
-    ctx.save(); ctx.globalAlpha=0.3; ctx.strokeStyle=c1; ctx.lineWidth=1;
-    ctx.beginPath(); ctx.moveTo(cx,cy-r+2); ctx.lineTo(cx,cy-r+6); ctx.stroke(); ctx.restore();
-    // Needle 1 — primary (shorter, underneath)
-    const n1x=Math.sin(a1), n1y=-Math.cos(a1);
-    const tip1={x:cx+n1x*r*0.72, y:cy+n1y*r*0.72};
-    const tail1={x:cx-n1x*r*0.22, y:cy-n1y*r*0.22};
-    ctx.strokeStyle=c1; ctx.lineWidth=1.5; ctx.globalAlpha=0.55;
-    ctx.beginPath(); ctx.moveTo(tail1.x,tail1.y); ctx.lineTo(tip1.x,tip1.y); ctx.stroke();
-    ctx.globalAlpha=0.55;
-    const a1a=Math.atan2(n1y,n1x), as1=4;
+  // ---- Layout: 2x2 grid top-left ----
+  const CR=36, PAD=14, HGAP=8, VGAP=28; // VGAP accounts for label rows below each gauge
+  const CELL_W=CR*2+HGAP;
+  const CELL_H=CR*2+VGAP;
+  // Row/col centers
+  const CX0=PAD+CR, CY0=PAD+CR;
+  const CX1=PAD+CR+CELL_W;
+  const CY1=PAD+CR+CELL_H;
+
+  // ---- Local helpers ----
+
+  // Transparent single-needle compass
+  function cpass(cx,cy,angleRad,color){
+    ctx.save();
+    ctx.globalAlpha=0.22; ctx.fillStyle='#030710';
+    ctx.beginPath(); ctx.arc(cx,cy,CR,0,Math.PI*2); ctx.fill();
+    ctx.globalAlpha=0.55; ctx.strokeStyle='rgba(30,51,84,0.8)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.arc(cx,cy,CR,0,Math.PI*2); ctx.stroke();
+    // tick
+    ctx.globalAlpha=0.28; ctx.strokeStyle=color; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(cx,cy-CR+2); ctx.lineTo(cx,cy-CR+5); ctx.stroke();
+    // needle
+    ctx.globalAlpha=0.92;
+    const nx=Math.sin(angleRad),ny=-Math.cos(angleRad);
+    const tip={x:cx+nx*CR*0.80,y:cy+ny*CR*0.80};
+    const tail={x:cx-nx*CR*0.26,y:cy-ny*CR*0.26};
+    ctx.strokeStyle=color; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(tail.x,tail.y); ctx.lineTo(tip.x,tip.y); ctx.stroke();
+    const ang=Math.atan2(ny,nx),as=4;
+    ctx.fillStyle=color; ctx.beginPath();
+    ctx.moveTo(tip.x,tip.y);
+    ctx.lineTo(tip.x-as*Math.cos(ang-0.45),tip.y-as*Math.sin(ang-0.45));
+    ctx.lineTo(tip.x-as*Math.cos(ang+0.45),tip.y-as*Math.sin(ang+0.45));
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
+  // Transparent dual-needle compass (needle1=dim, needle2=bright when active)
+  function cpass2(cx,cy,a1,c1,a2,c2,n2active){
+    ctx.save();
+    ctx.globalAlpha=0.22; ctx.fillStyle='#030710';
+    ctx.beginPath(); ctx.arc(cx,cy,CR,0,Math.PI*2); ctx.fill();
+    ctx.globalAlpha=0.55; ctx.strokeStyle='rgba(30,51,84,0.8)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.arc(cx,cy,CR,0,Math.PI*2); ctx.stroke();
+    ctx.globalAlpha=0.28; ctx.strokeStyle=c1; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(cx,cy-CR+2); ctx.lineTo(cx,cy-CR+5); ctx.stroke();
+    // Needle 1 (dim)
+    const n1x=Math.sin(a1),n1y=-Math.cos(a1);
+    const t1={x:cx+n1x*CR*0.70,y:cy+n1y*CR*0.70},b1={x:cx-n1x*CR*0.20,y:cy-n1y*CR*0.20};
+    ctx.globalAlpha=0.45; ctx.strokeStyle=c1; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.moveTo(b1.x,b1.y); ctx.lineTo(t1.x,t1.y); ctx.stroke();
+    const ang1=Math.atan2(n1y,n1x),as1=3;
     ctx.fillStyle=c1; ctx.beginPath();
-    ctx.moveTo(tip1.x,tip1.y);
-    ctx.lineTo(tip1.x-as1*Math.cos(a1a-0.45),tip1.y-as1*Math.sin(a1a-0.45));
-    ctx.lineTo(tip1.x-as1*Math.cos(a1a+0.45),tip1.y-as1*Math.sin(a1a+0.45));
-    ctx.closePath(); ctx.fill(); ctx.globalAlpha=1;
-    // Needle 2 — secondary (longer, on top)
-    if(a2active){
-      const n2x=Math.sin(a2), n2y=-Math.cos(a2);
-      const tip2={x:cx+n2x*r*0.82, y:cy+n2y*r*0.82};
-      const tail2={x:cx-n2x*r*0.28, y:cy-n2y*r*0.28};
+    ctx.moveTo(t1.x,t1.y);
+    ctx.lineTo(t1.x-as1*Math.cos(ang1-0.45),t1.y-as1*Math.sin(ang1-0.45));
+    ctx.lineTo(t1.x-as1*Math.cos(ang1+0.45),t1.y-as1*Math.sin(ang1+0.45));
+    ctx.closePath(); ctx.fill();
+    // Needle 2 (bright)
+    if(n2active){
+      ctx.globalAlpha=0.92;
+      const n2x=Math.sin(a2),n2y=-Math.cos(a2);
+      const t2={x:cx+n2x*CR*0.82,y:cy+n2y*CR*0.82},b2={x:cx-n2x*CR*0.28,y:cy-n2y*CR*0.28};
       ctx.strokeStyle=c2; ctx.lineWidth=2;
-      ctx.beginPath(); ctx.moveTo(tail2.x,tail2.y); ctx.lineTo(tip2.x,tip2.y); ctx.stroke();
-      const a2a=Math.atan2(n2y,n2x), as2=5;
+      ctx.beginPath(); ctx.moveTo(b2.x,b2.y); ctx.lineTo(t2.x,t2.y); ctx.stroke();
+      const ang2=Math.atan2(n2y,n2x),as2=4;
       ctx.fillStyle=c2; ctx.beginPath();
-      ctx.moveTo(tip2.x,tip2.y);
-      ctx.lineTo(tip2.x-as2*Math.cos(a2a-0.45),tip2.y-as2*Math.sin(a2a-0.45));
-      ctx.lineTo(tip2.x-as2*Math.cos(a2a+0.45),tip2.y-as2*Math.sin(a2a+0.45));
+      ctx.moveTo(t2.x,t2.y);
+      ctx.lineTo(t2.x-as2*Math.cos(ang2-0.45),t2.y-as2*Math.sin(ang2-0.45));
+      ctx.lineTo(t2.x-as2*Math.cos(ang2+0.45),t2.y-as2*Math.sin(ang2+0.45));
       ctx.closePath(); ctx.fill();
     }
+    ctx.restore();
   }
 
-  // Helper: LED alarm dot
-  function drawLED(x,y,color,lit){
-    ctx.beginPath(); ctx.arc(x,y,5,0,Math.PI*2);
-    ctx.fillStyle=lit?color:C_LED_OFF; ctx.fill();
-    if(lit){ctx.strokeStyle=color; ctx.lineWidth=1; ctx.globalAlpha=0.5;
-      ctx.beginPath(); ctx.arc(x,y,7,0,Math.PI*2); ctx.stroke(); ctx.globalAlpha=1;}
+  function led(x,y,color,lit){
+    ctx.save();
+    ctx.beginPath(); ctx.arc(x,y,4,0,Math.PI*2);
+    ctx.fillStyle=lit?color:'rgba(20,35,20,0.6)'; ctx.fill();
+    if(lit){ctx.globalAlpha=0.4;ctx.strokeStyle=color;ctx.lineWidth=1;
+      ctx.beginPath();ctx.arc(x,y,6,0,Math.PI*2);ctx.stroke();}
+    ctx.restore();
   }
 
-  // ----------------------------------------------------------------
-  // Gauge 1 — GRAV
-  // ----------------------------------------------------------------
-  drawCompass(G1X, GAUGE_CY, CR, gravAngle, '#ff8844', true);
-  // LEDs: yellow >2g, red >5g
-  drawLED(G1X+CR-6, GAUGE_CY-CR+6, HWARN, gravG>2);
-  drawLED(G1X+CR+6, GAUGE_CY-CR+6, HOFF,  gravG>5);
-  ctx.fillStyle='#5a7a9a'; ctx.font=fnt(13); ctx.textAlign='center';
-  ctx.fillText('GRAV', G1X, GAUGE_CY+CR+16);
-  ctx.fillStyle='#ff8844'; ctx.font='bold '+fnt(14);
-  ctx.fillText(`${gravG.toFixed(2)} g`, G1X, GAUGE_CY+CR+30);
-  ctx.textAlign='left';
+  function glabel(text,cx,cy,color,bold){
+    ctx.save(); ctx.globalAlpha=0.65;
+    ctx.fillStyle=color||'#4a6a8a';
+    ctx.font=(bold?'bold ':'')+fnt(11); ctx.textAlign='center';
+    ctx.fillText(text,cx,cy); ctx.restore();
+  }
 
-  // ----------------------------------------------------------------
-  // Gauge 2 — SPD + HDG
-  // ----------------------------------------------------------------
-  // Needle 1: heading (dim teal), Needle 2: velocity direction (bright cyan)
-  drawDualCompass(G2X, GAUGE_CY, CR, hdgAngle, '#2299bb', spdAngle, HON, spdMag>0.5);
-  // LED: yellow >400, red >700
-  drawLED(G2X+CR-6, GAUGE_CY-CR+6, HWARN, spdMag>400);
-  drawLED(G2X+CR+6, GAUGE_CY-CR+6, HOFF,  spdMag>700);
-  ctx.fillStyle='#5a7a9a'; ctx.font=fnt(13); ctx.textAlign='center';
-  ctx.fillText('SPD · HDG', G2X, GAUGE_CY+CR+16);
-  ctx.fillStyle=HON; ctx.font='bold '+fnt(14);
-  ctx.fillText(`${spdMag.toFixed(0)} m/s`, G2X, GAUGE_CY+CR+30);
-  ctx.textAlign='left';
+  // ---- GRAV (top-left) ----
+  cpass(CX0,CY0,gravAngle,'#ff8844');
+  led(CX0+CR-3,CY0-CR+3,HWARN,gravG>2);
+  led(CX0+CR+5,CY0-CR+3,HOFF,gravG>5);
+  glabel('GRAV',CX0,CY0+CR+12,'#4a6a8a');
+  glabel(`${gravG.toFixed(1)}g`,CX0,CY0+CR+22,'#ff8844',true);
 
-  // ----------------------------------------------------------------
-  // Gauge 3 — ACCEL + THRUST
-  // ----------------------------------------------------------------
-  // Needle 1: net accel (dim orange), Needle 2: thrust direction (bright if thrusting)
-  drawDualCompass(G3X, GAUGE_CY, CR, netAngle, '#cc6622', thrAngle, '#ffcc44', isThrusting);
-  const netG=netMag/50;
-  drawLED(G3X+CR-6, GAUGE_CY-CR+6, HWARN, netG>3);
-  drawLED(G3X+CR+6, GAUGE_CY-CR+6, HOFF,  netG>7);
-  ctx.fillStyle='#5a7a9a'; ctx.font=fnt(13); ctx.textAlign='center';
-  ctx.fillText('ACCEL · THR', G3X, GAUGE_CY+CR+16);
-  ctx.fillStyle='#cc8844'; ctx.font='bold '+fnt(14);
-  ctx.fillText(`${netG.toFixed(2)} g`, G3X, GAUGE_CY+CR+30);
-  ctx.textAlign='left';
+  // ---- SPD·HDG (top-right) ----
+  cpass2(CX1,CY0,hdgAngle,'#2299bb',spdAngle,HON,spdMag>0.5);
+  led(CX1+CR-3,CY0-CR+3,HWARN,spdMag>400);
+  led(CX1+CR+5,CY0-CR+3,HOFF,spdMag>700);
+  glabel('SPD·HDG',CX1,CY0+CR+12,'#4a6a8a');
+  glabel(`${spdMag.toFixed(0)}`,CX1,CY0+CR+22,HON,true);
 
-  // ----------------------------------------------------------------
-  // Fuel bar
-  // ----------------------------------------------------------------
-  const FUEL_BAR_X=Math.round(cw*0.25), FUEL_BAR_W=Math.round(cw*0.50);
+  // ---- ACCEL·THR (bottom-left) ----
+  cpass2(CX0,CY1,netAngle,'#cc6622',thrAngle,HWARN,isThrusting);
+  led(CX0+CR-3,CY1-CR+3,HWARN,netG>3);
+  led(CX0+CR+5,CY1-CR+3,HOFF,netG>7);
+  glabel('ACCEL·THR',CX0,CY1+CR+12,'#4a6a8a');
+  glabel(`${netG.toFixed(1)}g`,CX0,CY1+CR+22,'#cc8844',true);
+
+  // ---- Fuel — vertical bar (bottom-right slot) ----
+  const FB_X=CX1-CR, FB_Y=CY1-CR, FB_W=CR*2, FB_H=CR*2;
   const fuelColor=fp>0.5?'#22bb66':fp>0.2?'#aacc22':fp>0.1?'#ffaa00':'#ff3322';
-  // bar background
-  ctx.fillStyle='#0a0f1a'; ctx.fillRect(FUEL_BAR_X,FUEL_Y,FUEL_BAR_W,FUEL_H);
-  // fill
+  ctx.save();
+  ctx.globalAlpha=0.20; ctx.fillStyle='#030710';
+  ctx.beginPath(); ctx.roundRect(FB_X,FB_Y,FB_W,FB_H,4); ctx.fill();
+  ctx.globalAlpha=0.40; ctx.strokeStyle='rgba(30,51,84,0.8)'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.roundRect(FB_X,FB_Y,FB_W,FB_H,4); ctx.stroke();
+  // fill from bottom
   if(fp>0){
-    ctx.fillStyle=fuelColor;
-    ctx.fillRect(FUEL_BAR_X,FUEL_Y,FUEL_BAR_W*Math.min(1,fp),FUEL_H);
+    const fillH=FB_H*Math.min(1,fp);
+    ctx.globalAlpha=0.80; ctx.fillStyle=fuelColor;
+    ctx.beginPath(); ctx.roundRect(FB_X,FB_Y+FB_H-fillH,FB_W,fillH,2); ctx.fill();
   }
-  ctx.strokeStyle='#1a3355'; ctx.lineWidth=1; ctx.strokeRect(FUEL_BAR_X,FUEL_Y,FUEL_BAR_W,FUEL_H);
+  ctx.restore();
+  // % label
+  glabel(`${(fp*100).toFixed(0)}%`,CX1,CY1+CR+12,fuelColor,true);
   // FUEL label
-  ctx.fillStyle='#3a5a7a'; ctx.font=fnt(12); ctx.textAlign='right';
-  ctx.fillText('FUEL', FUEL_BAR_X-6, FUEL_Y+FUEL_H-1);
-  // percentage
-  ctx.fillStyle=fuelColor; ctx.textAlign='left';
-  ctx.fillText(`${(fp*100).toFixed(0)}%`, FUEL_BAR_X+FUEL_BAR_W+6, FUEL_Y+FUEL_H-1);
-  ctx.textAlign='left';
-  // Critical LED alarm
-  if(isCritical){
-    const ledBlink=isAlarm?blinkFast:true;
-    drawLED(FUEL_BAR_X-22, FUEL_Y+FUEL_H/2+1, HOFF, ledBlink);
-  }
-  // Emergency tank indicator
+  glabel('FUEL',CX1,CY1-CR-4,'#4a6a8a');
+  // Critical LED
+  if(isCritical) led(CX1,CY1-CR-14,HOFF,isAlarm?blinkFast:true);
+  // Emergency tank
   if(S.extraFuelReady){
-    ctx.fillStyle='#ffcc44'; ctx.font=fnt(12); ctx.textAlign='right';
-    ctx.fillText('F · EMERGENCY TANK', FUEL_BAR_X-32, FUEL_Y+FUEL_H-1);
-    ctx.textAlign='left';
+    ctx.save(); ctx.globalAlpha=0.8;
+    ctx.fillStyle=HWARN; ctx.font=fnt(10); ctx.textAlign='center';
+    ctx.fillText('F·EMRG',CX1,CY1+CR+22); ctx.restore();
   }
-
-  // Laser cooldown bar (above fuel bar, thin 3px)
+  // Laser cooldown: thin bar across the bottom of the cluster
   if(sh.laserCooldown>0){
-    const LCD_Y=FUEL_Y-6, LCD_H=3;
     const lcFrac=clamp(sh.laserCooldown/LASER_COOL,0,1);
-    ctx.fillStyle='#0a0f1a'; ctx.fillRect(FUEL_BAR_X,LCD_Y,FUEL_BAR_W,LCD_H);
-    ctx.fillStyle='#5599ff';
-    ctx.fillRect(FUEL_BAR_X,LCD_Y,FUEL_BAR_W*(1-lcFrac),LCD_H);
-    ctx.strokeStyle='#1a3355'; ctx.lineWidth=1; ctx.strokeRect(FUEL_BAR_X,LCD_Y,FUEL_BAR_W,LCD_H);
+    const LCY=CY1+CR+30, LCW=CX1+CR-CX0+CR, LCH=3;
+    ctx.save(); ctx.globalAlpha=0.4;
+    ctx.fillStyle='#0a0f1a'; ctx.fillRect(CX0-CR,LCY,LCW,LCH);
+    ctx.globalAlpha=0.85; ctx.fillStyle='#5599ff';
+    ctx.fillRect(CX0-CR,LCY,LCW*(1-lcFrac),LCH);
+    ctx.restore();
   }
 
-  // ----------------------------------------------------------------
-  // Help text rows
-  // ----------------------------------------------------------------
   _drawHelpRows(cw,ch,HON,HOFF,HWARN);
 }
 
