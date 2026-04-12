@@ -1353,9 +1353,16 @@ function updateCam(dt){
   }
   const objRemote=clamp((nearDist-2000)/9000,0,1);
 
-  // Base zoom from objective distance; body proximity overrides toward ZOOM_MAX
+  // Speed cap: fast flight forces zoom-out; nearly stopped lifts constraint for approach/mining
+  const spdMag=Math.hypot(sh.vx,sh.vy);
+  const speedCap=spdMag<30?ZOOM_MAX:clamp(1.5-spdMag/500,0.25,1.5);
+
+  // Proximity zoom (objective distance + body closeness)
   const baseZoom=ZOOM_DEF*(1-objRemote*0.65);
-  const targetZoom=clamp(lerp(baseZoom,ZOOM_MAX*0.75,bodyProx*bodyProx),ZOOM_MIN,ZOOM_MAX);
+  const proxZoom=clamp(lerp(baseZoom,ZOOM_MAX*0.75,bodyProx*bodyProx),ZOOM_MIN,ZOOM_MAX);
+
+  // Speed wins: can never zoom in more than speed allows
+  const targetZoom=clamp(Math.min(proxZoom,speedCap),ZOOM_MIN,ZOOM_MAX);
   S.cam.zoom=lerp(S.cam.zoom,targetZoom,Math.min(1,0.5*dt));
 }
 function w2s(wx,wy){
@@ -2424,15 +2431,29 @@ function renderHUD(){
     ctx.textAlign='left';
   }
 
-  // Bottom two rows — left-aligned, clear of minimap
+  // Bottom two rows — color-coded toggles
   const ver = window.GAME_VER || 'dev';
-  ctx.fillStyle=C_DIM;ctx.font=fnt(20);
-  ctx.textAlign='left';
   const gravModeLabel = CONFIG.gravMode==='off'?'off':CONFIG.gravMode;
-  ctx.fillText(`WASD · SHIFT:boost · SPACE:laser · F:emerg.fuel · G:grav[${gravModeLabel}] · Z:autozoom`, 22, ch-38);
-  ctx.fillText(`${ver}  ·  -/=:zoom · M:map · Tab:settings · \`:cheat · R:restart · ESC:pause`, 22, ch-16);
-  ctx.textAlign='right';
-  ctx.fillText(`×${S.cam.zoom.toFixed(2)}`, cw-16, ch-16);
+  ctx.font=fnt(20); ctx.textAlign='left';
+  const HON='#22ffbb', HOFF='#ff4444', HWARN='#ffcc44';
+  const tok=(text,color,x,y)=>{ctx.fillStyle=color;ctx.fillText(text,x,y);return x+ctx.measureText(text).width;};
+
+  let hx=22;
+  hx=tok('WASD · SHIFT:boost · SPACE:laser · F:emerg.fuel · ',C_DIM,hx,ch-38);
+  hx=tok('G:grav[',C_DIM,hx,ch-38);
+  hx=tok(gravModeLabel,CONFIG.gravMode==='off'?HOFF:HON,hx,ch-38);
+  hx=tok('] · ',C_DIM,hx,ch-38);
+  tok('Z:autozoom',CONFIG.autoZoom?HON:HOFF,hx,ch-38);
+
+  hx=22;
+  hx=tok(`${ver}  ·  -/=:zoom · `,C_DIM,hx,ch-16);
+  hx=tok('M:map',S.showMinimap?HON:HOFF,hx,ch-16);
+  hx=tok(' · Tab:settings · ',C_DIM,hx,ch-16);
+  hx=tok('`:cheat',S.cheat?HWARN:C_DIM,hx,ch-16);
+  tok(' · R:restart · ESC:pause',C_DIM,hx,ch-16);
+
+  ctx.textAlign='right'; ctx.fillStyle=C_DIM;
+  ctx.fillText(`×${S.cam.zoom.toFixed(2)}`,cw-16,ch-16);
   if(CONFIG.showFPS){ctx.fillText(`${_fps} fps`,cw-16,ch-38);}
   ctx.textAlign='left';
 
